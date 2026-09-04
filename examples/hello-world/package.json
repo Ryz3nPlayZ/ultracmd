@@ -1,0 +1,8 @@
+{
+  "name": "hello-world",
+  "title": "Hello World",
+  "description": "Minimal UltraCMD extension showing List, actions and toasts",
+  "commands": [
+    { "name": "greetings", "title": "Greet the World", "icon": "sparkles" }
+  ]
+}

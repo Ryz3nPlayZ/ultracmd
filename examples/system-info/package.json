@@ -1,0 +1,8 @@
+{
+  "name": "system-info",
+  "title": "System Info",
+  "description": "System statistics rendered with useBash + Detail markdown",
+  "commands": [
+    { "name": "sysinfo", "title": "System Info", "icon": "desktop" }
+  ]
+}

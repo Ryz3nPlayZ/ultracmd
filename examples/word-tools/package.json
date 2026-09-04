@@ -1,0 +1,8 @@
+{
+  "name": "word-tools",
+  "title": "Word Tools",
+  "description": "Text form with live validation — counts words & characters",
+  "commands": [
+    { "name": "count", "title": "Count Words", "icon": "text" }
+  ]
+}

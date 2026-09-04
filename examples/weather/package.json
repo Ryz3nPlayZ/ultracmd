@@ -1,0 +1,8 @@
+{
+  "name": "weather",
+  "title": "Weather (open-meteo)",
+  "description": "Live weather via the free open-meteo API — no API key needed",
+  "commands": [
+    { "name": "weather", "title": "Check Weather", "icon": "sun" }
+  ]
+}
