@@ -26,6 +26,50 @@ web-engine/Electron components**, and runs at native WindowServer speed.
 └────────────────────────────────────────────────────────────────────┘
 ```
 
+## Installation
+
+**macOS 13+, Apple Silicon (arm64).**
+
+**curl** (one line):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Ryz3nPlayZ/ultracmd/main/scripts/install.sh | bash
+```
+
+Downloads the latest [release](https://github.com/Ryz3nPlayZ/ultracmd/releases) DMG and installs
+UltraCMD.app into `/Applications` (falls back to `~/Applications` without sudo; override with
+`ULTRACMD_DEST=/path`). Re-running upgrades in place.
+
+**Homebrew**:
+
+```sh
+brew install --cask ryz3nplayz/tap/ultracmd
+```
+
+or explicitly:
+
+```sh
+brew tap ryz3nPlayZ/tap
+brew trust ryz3nPlayZ/tap    # newer Homebrew requires trusting third-party taps
+brew install --cask ultracmd
+```
+
+**Manual**: grab `UltraCMD.dmg` from the [latest release](https://github.com/Ryz3nPlayZ/ultracmd/releases/latest),
+open it and drag UltraCMD to Applications.
+
+> The app is ad-hoc signed and not notarized. macOS may ask you to confirm the first
+> launch (right-click → Open if Gatekeeper blocks it). Grant **Accessibility** in
+> System Settings → Privacy & Security for window tiling and auto-paste; Screen
+> Recording is optional (screenshots tools). UltraCMD asks for Accessibility at most
+> once, ever.
+
+**From source**:
+
+```sh
+git clone https://github.com/Ryz3nPlayZ/ultracmd && cd ultracmd
+swift test && ./scripts/make-app.sh   # → build/UltraCMD.app
+```
+
 ## Features
 
 ### 1. System launcher & unified search
