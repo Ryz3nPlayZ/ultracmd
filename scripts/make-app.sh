@@ -1,6 +1,10 @@
 #!/bin/zsh
 # Builds UltraCMD.app from the Swift package.
 # Usage: ./scripts/make-app.sh [output-dir]
+#
+# Signing: uses a "Developer ID Application" certificate when one is in the
+# login keychain (with the hardened runtime required for notarization);
+# otherwise falls back to an ad-hoc signature. See README → Releasing.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT_DIR="${1:-$ROOT/build}"
@@ -69,9 +73,36 @@ echo "▸ Generating app icon…"
 "$ROOT/scripts/make-icon.sh" "$APP/Contents/Resources/AppIcon.icns"
 /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon.icns" "$APP/Contents/Info.plist" > /dev/null
 
-# Ad-hoc signature so the bundle launches cleanly (Gatekeeper-wise) on first run.
-echo "▸ Ad-hoc codesigning…"
-codesign --force --deep --sign - "$APP" > /dev/null 2>&1 || echo "  (codesign skipped)"
+# --- Signing ---------------------------------------------------------------
+# Developer ID if present (enables notarization in make-dmg.sh), else ad-hoc.
+IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+    | awk '/Developer ID Application/ {sub(/^.*"|"$/, "", $0); print; exit}')"
+
+if [[ -n "$IDENTITY" ]]; then
+    ENTITLEMENTS="$OUT_DIR/ultracmd-entitlements.plist"
+    cat > "$ENTITLEMENTS" <<ENT
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Hardened runtime is required for notarization; JavaScriptCore (the
+         extension runtime) needs JIT. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+</dict>
+</plist>
+ENT
+    echo "▸ Codesigning with Developer ID: $IDENTITY"
+    codesign --force --deep --options runtime \
+        --entitlements "$ENTITLEMENTS" \
+        --sign "$IDENTITY" "$APP"
+    codesign --verify --strict "$APP"
+else
+    echo "▸ No Developer ID certificate found — ad-hoc signing."
+    echo "  (macOS will warn on first launch until the app is notarized;"
+    echo "   see README → Releasing for the one-time setup.)"
+    codesign --force --deep --sign - "$APP" > /dev/null 2>&1 || echo "  (codesign skipped)"
+fi
 
 echo "✓ $APP built."
 echo "  Install to /Applications with:  cp -R '$APP' /Applications/"

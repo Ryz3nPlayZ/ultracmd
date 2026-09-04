@@ -54,14 +54,25 @@ brew trust ryz3nPlayZ/tap    # newer Homebrew requires trusting third-party taps
 brew install --cask ultracmd
 ```
 
+The cask clears the macOS quarantine flag after copying the app, so Gatekeeper's
+"Apple could not verify…" prompt does not appear (the build is not notarized —
+see the note below). If you installed an older revision of the cask and hit the
+prompt, clear the flag once and re-launch:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/UltraCMD.app
+```
+
 **Manual**: grab `UltraCMD.dmg` from the [latest release](https://github.com/Ryz3nPlayZ/ultracmd/releases/latest),
 open it and drag UltraCMD to Applications.
 
-> The app is ad-hoc signed and not notarized. macOS may ask you to confirm the first
-> launch (right-click → Open if Gatekeeper blocks it). Grant **Accessibility** in
-> System Settings → Privacy & Security for window tiling and auto-paste; Screen
-> Recording is optional (screenshots tools). UltraCMD asks for Accessibility at most
-> once, ever.
+> **Not notarized.** UltraCMD is ad-hoc signed (no Apple Developer Program yet),
+> so Gatekeeper cannot vouch for it. The curl installer and `brew … --no-quarantine`
+> avoid the prompt entirely; otherwise macOS shows *"Apple could not verify…"* once —
+> dismiss it and open via right-click → **Open** → Open (or System Settings → Privacy
+> & Security → **Open Anyway**). Grant **Accessibility** in System Settings → Privacy
+> & Security for window tiling and auto-paste; Screen Recording is optional
+> (screenshot tools). UltraCMD asks for Accessibility at most once, ever.
 
 **From source**:
 
@@ -304,3 +315,30 @@ and the full key-binding hierarchy.
 UltraCMD is free software in both senses: no subscription, no telemetry, no
 phoning home. It exists because launchers are infrastructure, and
 infrastructure shouldn't rent-seek. Contributions welcome.
+
+## Releasing & notarization
+
+```sh
+./scripts/make-dmg.sh        # → build/UltraCMD.dmg (builds the app too)
+shasum -a 256 build/UltraCMD.dmg
+gh release create vX.Y.Z build/UltraCMD.dmg --notes …
+# bump version + sha256 in packaging/Casks/ultracmd.rb and Ryz3nPlayZ/homebrew-tap
+```
+
+Both scripts auto-detect a **Developer ID Application** certificate: with one in
+the login keychain (plus a notarytool profile), the app and DMG are signed with
+the hardened runtime, notarized and stapled — brew/curl installs then open with
+no Gatekeeper prompt and `--no-quarantine` becomes unnecessary. One-time setup
+(requires the [Apple Developer Program](https://developer.apple.com/programs/)):
+
+1. Create a *Developer ID Application* certificate in developer.apple.com →
+   Certificates, download the `.cer` (or import a team admin's `.p12`) so
+   `security find-identity -v -p codesigning` lists it.
+2. Create an app-specific password (appleid.apple.com) or an App Store Connect
+   API key, then store credentials:
+
+   ```sh
+   xcrun notarytool store-credentials ultracmd-notary        --apple-id you@example.com --team-id TEAMID --password app-specific
+   ```
+
+3. Re-run `./scripts/make-dmg.sh` — everything else is automatic.

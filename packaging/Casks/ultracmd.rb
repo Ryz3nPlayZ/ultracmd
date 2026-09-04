@@ -10,6 +10,22 @@ cask "ultracmd" do
   depends_on macos: :ventura
   depends_on arch: :arm64
 
+  livecheck do
+    url "https://github.com/Ryz3nPlayZ/ultracmd/releases"
+    strategy :github_latest
+  end
+
+
+  # Not notarized (no Apple Developer Program yet): Homebrew always
+  # quarantines cask downloads on modern versions and Gatekeeper blocks the
+  # first launch with "Apple could not verify…". Clearing the flag here makes
+  # the same explicit trust decision the curl installer documents. Delete
+  # this block once builds are Developer ID signed + notarized.
+  postflight do
+    system_command "/usr/bin/xattr",
+                   args: ["-dr", "com.apple.quarantine", "#{appdir}/UltraCMD.app"]
+  end
+
   app "UltraCMD.app"
 
   zap trash: [
