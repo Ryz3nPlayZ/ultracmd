@@ -34,6 +34,9 @@ enum SystemServices {
             "\(NSHomeDirectory())/.local/bin",
             "/usr/bin",
             "/bin",
+            "/usr/sbin",
+            "/sbin",
+            "/opt/homebrew/sbin",
         ]
         let fm = FileManager.default
         let pathEnv = ProcessInfo.processInfo.environment["PATH"] ?? ""
@@ -399,10 +402,160 @@ enum MapsService {
 }
 
 enum WebService {
-    static func searchURL(for query: String) -> URL? {
-        var components = URLComponents(string: "https://www.google.com/search")
+    static func searchURL(for query: String, engine: Int? = nil) -> URL? {
+        let index = engine ?? SettingsStore.shared.webSearchEngineIndex
+        let base: String
+        switch index {
+        case 1: base = "https://duckduckgo.com/"
+        case 2: base = "https://www.bing.com/search"
+        default: base = "https://www.google.com/search"
+        }
+        var components = URLComponents(string: base)
         components?.queryItems = [URLQueryItem(name: "q", value: query)]
         return components?.url
+    }
+}
+
+// MARK: - System toggles (Wi-Fi / Bluetooth / volume / Focus)
+
+/// Best-effort system state toggles. Everything that needs a subprocess or
+/// AppleScript runs off the main thread; results are reported on the main
+/// queue so commands can toast the outcome.
+enum SystemToggles {
+
+    /// Resolve the Wi-Fi interface (usually en0) from networksetup's
+    /// hardware-port listing.
+    static func wifiInterface() -> String? {
+        guard let tool = SystemServices.findExecutable("networksetup") else { return nil }
+        guard let listing = try? SystemServices.runCLI(tool, ["-listallhardwareports"]) else { return nil }
+        // Blocks look like:
+        //   Hardware Port: Wi-Fi
+        //   Device: en0
+        let lines = listing.split(separator: "\n").map(String.init)
+        for (index, line) in lines.enumerated() {
+            if line.contains("Wi-Fi") || line.contains("AirPort") {
+                let window = lines[(index + 1)...min(index + 3, lines.count - 1)]
+                for candidate in window where candidate.contains("Device:") {
+                    let device = candidate
+                        .replacingOccurrences(of: "Device:", with: "")
+                        .trimmingCharacters(in: .whitespaces)
+                    if !device.isEmpty { return device }
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Toggle Wi-Fi; reports the new state (nil on failure).
+    static func toggleWiFi(completion: ((Bool?) -> Void)? = nil) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let tool = SystemServices.findExecutable("networksetup"),
+                  let device = wifiInterface() else {
+                DispatchQueue.main.async { completion?(nil) }
+                return
+            }
+            guard let state = try? SystemServices.runCLI(tool, ["-getairportpower", device]) else {
+                DispatchQueue.main.async { completion?(nil) }
+                return
+            }
+            // Output looks like "Wi-Fi Power (en0): On" / ": Off".
+            let isOn = state.lowercased().contains(": on")
+            let target = isOn ? "off" : "on"
+            do {
+                _ = try SystemServices.runCLI(tool, ["-setairportpower", device, target])
+                DispatchQueue.main.async { completion?(!isOn) }
+            } catch {
+                DispatchQueue.main.async { completion?(nil) }
+            }
+        }
+    }
+
+    /// Toggle Bluetooth via `blueutil` when installed; otherwise opens the
+    /// System Settings pane (Apple removed the scriptable toggle).
+    static func toggleBluetooth(completion: ((Bool?) -> Void)? = nil) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let blueutil = SystemServices.findExecutable("blueutil") else {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.Bluetooth") {
+                    NSWorkspace.shared.open(url)
+                }
+                DispatchQueue.main.async { completion?(nil) }
+                return
+            }
+            guard let state = try? SystemServices.runCLI(blueutil, ["-p"]) else {
+                DispatchQueue.main.async { completion?(nil) }
+                return
+            }
+            let wasOn = state.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+            do {
+                _ = try SystemServices.runCLI(blueutil, ["-p", wasOn ? "0" : "1"])
+                DispatchQueue.main.async { completion?(!wasOn) }
+            } catch {
+                DispatchQueue.main.async { completion?(nil) }
+            }
+        }
+    }
+
+    /// Set the output volume (0–100).
+    static func setVolume(_ percent: Int, completion: (() -> Void)? = nil) {
+        let clamped = min(max(percent, 0), 100)
+        SystemServices.runAppleScript("set volume output volume \(clamped)") { _ in
+            completion?()
+        }
+    }
+
+    /// Toggle mute; reports the new mute state (nil on failure).
+    static func toggleMute(completion: ((Bool?) -> Void)? = nil) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            var error: NSDictionary?
+            let script = """
+            set wasMuted to output muted of (get volume settings)
+            set volume output muted (not wasMuted)
+            return (not wasMuted) as text
+            """
+            let output = NSAppleScript(source: script)?.executeAndReturnError(&error).stringValue
+            if let error { NSLog("ultracmd mute error: \(error)") }
+            let nowMuted = output?.trimmingCharacters(in: .whitespaces) == "true"
+            DispatchQueue.main.async { completion?(error == nil ? nowMuted : nil) }
+        }
+    }
+
+    /// Toggle Focus/Do-Not-Disturb via Control Center UI scripting. Apple
+    /// keeps changing this UI, so failure surfaces instead of pretending.
+    static func toggleFocus(completion: ((Bool?) -> Void)? = nil) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let script = """
+            tell application "System Events"
+                tell process "ControlCenter"
+                    set focusItem to missing value
+                    repeat with anItem in menu bar items of menu bar 1
+                        try
+                            if name of anItem contains "Focus" then
+                                set focusItem to anItem
+                                exit repeat
+                            end if
+                        end try
+                    end repeat
+                    if focusItem is missing value then error "Focus item not found"
+                    click focusItem
+                    delay 0.4
+                    repeat with aGroup in groups of window 1
+                        try
+                            set dnd to first menu button of aGroup whose description contains "Do Not Disturb"
+                            click dnd
+                            key code 53
+                            return "1"
+                        end try
+                    end repeat
+                    key code 53
+                    error "Do Not Disturb toggle not found"
+                end tell
+            end tell
+            """
+            var error: NSDictionary?
+            let output = NSAppleScript(source: script)?.executeAndReturnError(&error).stringValue
+            if let error { NSLog("ultracmd focus error: \(error)") }
+            DispatchQueue.main.async { completion?(output == "1" ? true : nil) }
+        }
     }
 }
 

@@ -26,6 +26,8 @@ final class AppModel: ObservableObject {
         let extensions = ExtensionManager()
         let dictation = DictationController()
         let ollama = OllamaDiscovery()
+        let quicklinks = QuicklinkStore()
+        let snippets = SnippetStore()
 
         init() {
             rewriter = SelectionRewriter(ai: ai)
@@ -39,6 +41,10 @@ final class AppModel: ObservableObject {
     var onHotkeyChanged: () -> Void = {}
     var onOpenSettings: () -> Void = {}
     var onOpenFullChat: () -> Void = {}
+    /// Wired to the window controller so every hide path runs teardown and
+    /// the fade-out animation (falls back to a bare orderOut before the
+    /// controller exists).
+    var onLauncherHide: () -> Void = {}
     weak var launcherWindow: NSWindow?
 
     /// Live appearance changes from SettingsStore re-render the launcher.
@@ -82,6 +88,10 @@ final class AppModel: ObservableObject {
     @Published var clipboardSelectedIndex = 0
     @Published var clipboardFilter: ClipFilter = .all
     @Published var clipboardFilterOpen = false
+    /// Whether ⌘V synthesis into other apps is possible right now; refreshed
+    /// on every summon and clipboard open so granting Accessibility in System
+    /// Settings is picked up without a relaunch.
+    @Published private(set) var pasteAccessibilityTrusted = AccessibilityHelper.isTrusted()
 
     // Emoji picker page (single grid surface — issue #3/#7)
     @Published var emojiResults: [EmojiStore.Entry] = []
@@ -115,7 +125,19 @@ final class AppModel: ObservableObject {
     @Published private(set) var nextMeetingItem: SearchItem?
     private var nextMeetingEvent: EKEvent?
 
+    /// True while the launcher should render as the short compact window
+    /// (root mode + empty query + setting enabled). The window controller
+    /// animates the frame height when this flips.
+    @Published private(set) var compactHeightActive = false
+
+    /// Clipboard paste queue (Raycast "Paste Sequentially"): entries queued
+    /// via ⌘K; ⌘⇧V (or the palette action) pastes the next one.
+    @Published private(set) var pasteQueue: [ClipEntry] = []
+
     private var spotlightGeneration = 0
+    /// Off-main ranking queue + generation counter (stale passes discarded).
+    private let searchQueue = DispatchQueue(label: "ultracmd.search", qos: .userInitiated)
+    private var searchGeneration = 0
     private var toastRemovalTasks: [String: Task<Void, Never>] = [:]
     /// Accessibility nudge shown at most once per session (issue #7).
     private var didShowAXToastThisSession = false
@@ -125,9 +147,21 @@ final class AppModel: ObservableObject {
         wireCommands()
         wireExtensionCallbacks()
         wireDictation()
+        // Launch scan / app-install re-scans that land in the background
+        // refresh whatever the launcher is currently showing.
+        services.search.onIndexChange = { [weak self] in
+            Task { @MainActor in
+                self?.refreshResults()
+            }
+        }
+        services.search.startWatchingApplications()
         settingsCancellable = SettingsStore.shared.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+                self?.updateCompactHeight()
+            }
         refreshResults()
+        updateCompactHeight()
     }
 
     // MARK: Window lifecycle
@@ -144,7 +178,22 @@ final class AppModel: ObservableObject {
         clipboardFilterOpen = false
         confirmRequest = nil
         focusSeed &+= 1
+        pasteAccessibilityTrusted = AccessibilityHelper.isTrusted()
         refreshNextMeetingIfAuthorized()
+        updateCompactHeight()
+    }
+
+    /// Compact window mode: short panel while the root query is empty; the
+    /// full height the moment there is anything to show or another surface
+    /// is active.
+    func updateCompactHeight() {
+        let compact = SettingsStore.shared.compactLauncherWindow
+            && mode == .root
+            && query.isEmpty
+            && results.count > 0
+        if compactHeightActive != compact {
+            compactHeightActive = compact
+        }
     }
 
     func teardownForHide() {
@@ -155,7 +204,7 @@ final class AppModel: ObservableObject {
     }
 
     func hideLauncher() {
-        launcherWindow?.orderOut(nil)
+        onLauncherHide()
     }
 
     // MARK: Root search
@@ -165,6 +214,7 @@ final class AppModel: ObservableObject {
         switch mode {
         case .root:
             selectedIndex = 0
+            updateCompactHeight() // expand instantly on the first character
             refreshResults()
             scheduleSpotlight()
         case .clipboard:
@@ -178,24 +228,76 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Quicklinks + snippets as index items (rebuilt on the main actor each
+    /// search; the stores keep lock-guarded mirrors for the ranking queue).
+    private var userSearchItems: [SearchItem] {
+        var items: [SearchItem] = []
+        items.reserveCapacity(services.quicklinks.links.count + services.snippets.snippets.count)
+        for link in services.quicklinks.links {
+            items.append(SearchItem(
+                id: "quicklink:\(link.id.uuidString)",
+                title: link.name,
+                subtitle: link.url,
+                kind: .quicklink,
+                icon: .symbol("link"),
+                keywords: link.keywords,
+                url: link.url
+            ))
+        }
+        for snippet in services.snippets.snippets {
+            items.append(SearchItem(
+                id: "snippet:\(snippet.id.uuidString)",
+                title: snippet.name,
+                subtitle: String(snippet.body.prefix(80)).replacingOccurrences(of: "\n", with: " "),
+                kind: .snippet,
+                icon: .symbol("text.quote"),
+                keywords: snippet.keywords
+            ))
+        }
+        return items
+    }
+
     func refreshResults() {
         if query.isEmpty {
             var recent = services.search.recents(
                 commands: commands.searchItems,
-                extensionItems: services.extensions.searchItems
+                extensionItems: services.extensions.searchItems,
+                userItems: userSearchItems,
+                favorites: SettingsStore.shared.favoriteItemIDs
             )
             recent = filterHidden(recent)
             if let meeting = nextMeetingItem {
                 recent.insert(SearchResult(item: meeting, score: 9_999), at: 0)
             }
             results = recent
+            updateCompactHeight()
             return
         }
-        var all = filterHidden(services.search.search(
-            query: query,
-            commands: commands.searchItems,
-            extensionItems: services.extensions.searchItems
-        ))
+        // Rank off the main thread (the UI thread must never block on
+        // search). A generation counter discards passes that finished after
+        // a newer keystroke, so results can only ever move forward.
+        searchGeneration &+= 1
+        let generation = searchGeneration
+        let query = self.query
+        let engine = services.search
+        let commandItems = commands.searchItems
+        let extensionItems = services.extensions.searchItems
+        let userItems = userSearchItems
+        searchQueue.async { [weak self] in
+            let ranked = engine.search(query: query, commands: commandItems, extensionItems: extensionItems, userItems: userItems)
+            guard let self else { return }
+            Task { @MainActor in
+                guard self.searchGeneration == generation else { return }
+                self.applyRanked(ranked, for: query)
+            }
+        }
+    }
+
+    /// Post-processing of a ranked pass: hidden apps, calculator/unit/color
+    /// answer rows, URL detection, dynamic tool rows, inline emoji, AI/web
+    /// fallbacks. Runs on the main actor.
+    private func applyRanked(_ ranked: [SearchResult], for query: String) {
+        var all = filterHidden(ranked)
 
         // Calculator answer rides on top.
         if let value = Calculator.evaluate(query) {
@@ -210,24 +312,81 @@ final class AppModel: ObservableObject {
             all.insert(SearchResult(item: item, score: 10_000), at: 0)
         }
 
+        // Unit conversion answer ("5 kg to lb").
+        if let conversion = UnitConverter.convert(query) {
+            let item = SearchItem(
+                id: "calc:unit",
+                title: conversion.title,
+                subtitle: conversion.subtitle,
+                kind: .calculator,
+                icon: .symbol("ruler"),
+                keywords: ["convert", "unit"]
+            )
+            all.insert(SearchResult(item: item, score: 9_999), at: min(1, all.count))
+        }
+
+        // Color literal answer ("#ff8800", "rgb(255, 0, 0)") with a swatch.
+        if let hex = ClipClassifier.colorHex(from: query), ColorInfo.rgb(fromHex: hex) != nil {
+            let item = SearchItem(
+                id: "calc:color",
+                title: hex.uppercased(),
+                subtitle: ColorInfo.detailLine(forHex: hex) ?? "⏎ Copy",
+                kind: .calculator,
+                icon: .color(hex),
+                keywords: ["color", "hex", "swatch"]
+            )
+            all.insert(SearchResult(item: item, score: 9_998), at: min(1, all.count))
+        }
+
+        // Bare URL → open it directly.
+        if let url = URLDetector.openableURL(from: query) {
+            let item = SearchItem(
+                id: "dyn:url\u{1F}\(url.absoluteString)",
+                title: "Open \(url.host ?? url.absoluteString)",
+                subtitle: url.absoluteString,
+                kind: .bookmark,
+                icon: .symbol("safari"),
+                keywords: ["url", "open"],
+                url: url.absoluteString
+            )
+            all.insert(SearchResult(item: item, score: 9_997), at: min(2, all.count))
+        }
+
         // Dynamic tool rows (event/note/timer/maps/reminder templates).
         if let tool = dynamicToolRow(for: query) {
             all.insert(tool, at: min(1, all.count))
         }
 
-        // Nothing found → offer AI and the web.
+        // Inline emoji answers (in addition to the dedicated picker page).
+        if SettingsStore.shared.emojiInlineInRoot {
+            for entry in EmojiStore.search(query, limit: 3) where !all.contains(where: { $0.id == "emoji:\(entry.emoji)" }) {
+                all.append(SearchResult(item: SearchItem(
+                    id: "emoji:\(entry.emoji)",
+                    title: "\(entry.emoji)  \(entry.name)",
+                    subtitle: "Copy emoji",
+                    kind: .emoji,
+                    icon: .text(entry.emoji),
+                    keywords: entry.keywords
+                ), score: -900))
+            }
+        }
+
+        // Nothing found → offer the configured fallbacks.
         if all.isEmpty {
             let trimmed = query.trimmingCharacters(in: .whitespaces)
             if !trimmed.isEmpty {
-                all.append(SearchResult(item: SearchItem(
-                    id: "dyn:ai\u{1F}\(trimmed)",
-                    title: "Ask AI: \(trimmed)",
-                    subtitle: "Send this prompt to Quick AI",
-                    kind: .aiPrompt,
-                    icon: .symbol("wand.and.rays"),
-                    keywords: ["ai", "ask"]
-                ), score: 1))
-                if let url = WebService.searchURL(for: trimmed) {
+                if SettingsStore.shared.fallbackAIEnabled {
+                    all.append(SearchResult(item: SearchItem(
+                        id: "dyn:ai\u{1F}\(trimmed)",
+                        title: "Ask AI: \(trimmed)",
+                        subtitle: "Send this prompt to Quick AI",
+                        kind: .aiPrompt,
+                        icon: .symbol("wand.and.rays"),
+                        keywords: ["ai", "ask"]
+                    ), score: 1))
+                }
+                if SettingsStore.shared.fallbackWebEnabled,
+                   let url = WebService.searchURL(for: trimmed) {
                     all.append(SearchResult(item: SearchItem(
                         id: "dyn:web\u{1F}\(trimmed)",
                         title: "Search the Web for “\(trimmed)”",
@@ -242,6 +401,7 @@ final class AppModel: ObservableObject {
         }
 
         results = all
+        updateCompactHeight()
     }
 
     private func filterHidden(_ results: [SearchResult]) -> [SearchResult] {
@@ -340,6 +500,34 @@ final class AppModel: ObservableObject {
                 icon: "face.smiling"
             )
         }
+        if lower.hasPrefix("quicklink "), query.count > 10 {
+            let body = String(query.dropFirst(10))
+            return row(
+                id: "dyn:quicklink\(separator)\(body)",
+                title: "Create Quicklink — \(String(body.prefix(60)))",
+                subtitle: "Name + URL ({query} = live search)",
+                icon: "link.badge.plus"
+            )
+        }
+        if lower.hasPrefix("snippet "), query.count > 8 {
+            let body = String(query.dropFirst(8))
+            return row(
+                id: "dyn:snippet\(separator)\(body)",
+                title: "Create Snippet — \(String(body.prefix(60)))",
+                subtitle: "Name :: body ({clipboard} inserts clipboard)",
+                icon: "text.badge.plus"
+            )
+        }
+        if lower.hasPrefix("volume "), query.count > 7,
+           let percent = Int(query.dropFirst(7).trimmingCharacters(in: .whitespaces)),
+           (0...100).contains(percent) {
+            return row(
+                id: "dyn:volume\(separator)\(percent)",
+                title: "Set Volume — \(percent)%",
+                subtitle: "System output volume",
+                icon: "speaker.wave.2.fill"
+            )
+        }
         return nil
     }
 
@@ -431,6 +619,18 @@ final class AppModel: ObservableObject {
             let glyph = item.title.split(separator: " ", maxSplits: 1).first.map(String.init) ?? item.title
             copyToClipboard(glyph)
             hideLauncher()
+        case .quicklink:
+            let linkID = String(item.id.dropFirst("quicklink:".count))
+            guard let link = services.quicklinks.links.first(where: { $0.id.uuidString == linkID }) else { return }
+            hideLauncher()
+            if let url = link.resolvedURL(for: query) {
+                NSWorkspace.shared.open(url)
+            }
+        case .snippet:
+            let snippetID = String(item.id.dropFirst("snippet:".count))
+            guard let snippet = services.snippets.snippets.first(where: { $0.id.uuidString == snippetID }) else { return }
+            let clipboard = NSPasteboard.general.string(forType: .string)
+            pasteTextToActiveApp(snippet.expandedBody(clipboard: clipboard))
         case .command, .systemAction, .bookmark, .aiPrompt:
             commands.perform(id: item.id)
         case .extensionCommand:
@@ -489,9 +689,64 @@ final class AppModel: ObservableObject {
         case "dyn:web":
             hideLauncher()
             if let url = URL(string: item.url ?? "") { NSWorkspace.shared.open(url) }
+        case "dyn:url":
+            hideLauncher()
+            if let url = URL(string: item.url ?? "") { NSWorkspace.shared.open(url) }
+        case "dyn:quicklink":
+            createQuicklink(from: payload)
+        case "dyn:snippet":
+            createSnippet(from: payload)
+        case "dyn:volume":
+            let percent = Int(payload) ?? 50
+            SystemToggles.setVolume(percent) { [weak self] in
+                self?.showToast(style: .success, title: "Volume \(percent)%")
+            }
         default:
             break
         }
+    }
+
+    /// "quicklink Docs https://…/{query}" — last URL-ish token is the link,
+    /// everything before it is the name.
+    private func createQuicklink(from payload: String) {
+        let tokens = payload.split(separator: " ").map(String.init)
+        guard tokens.count >= 2 else {
+            showToast(style: .failure, title: "Usage: quicklink <name> <url>")
+            return
+        }
+        let url = tokens.last ?? ""
+        let name = tokens.dropLast().joined(separator: " ")
+        guard url.contains("."), !name.isEmpty else {
+            showToast(style: .failure, title: "Usage: quicklink <name> <url>")
+            return
+        }
+        services.quicklinks.upsert(Quicklink(name: name, url: url))
+        query = ""
+        refreshResults()
+        showToast(style: .success, title: "Quicklink created", message: name)
+    }
+
+    /// "snippet Signature :: Best, Alex" — " :: " splits name from body;
+    /// without a separator the first word is the name.
+    private func createSnippet(from payload: String) {
+        let name: String
+        let body: String
+        if let range = payload.range(of: " :: ") ?? payload.range(of: "::") {
+            name = String(payload[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
+            body = String(payload[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+        } else {
+            let tokens = payload.split(separator: " ", maxSplits: 1).map(String.init)
+            name = tokens.first ?? ""
+            body = tokens.count > 1 ? tokens[1] : ""
+        }
+        guard !name.isEmpty, !body.isEmpty else {
+            showToast(style: .failure, title: "Usage: snippet <name> :: <body>")
+            return
+        }
+        services.snippets.upsert(Snippet(name: name, body: body))
+        query = ""
+        refreshResults()
+        showToast(style: .success, title: "Snippet created", message: name)
     }
 
     private func copyToClipboard(_ value: String) {
@@ -677,7 +932,9 @@ final class AppModel: ObservableObject {
         mode = .clipboard
         query = ""
         clipboardFilterOpen = false
+        pasteAccessibilityTrusted = AccessibilityHelper.isTrusted()
         refreshClipboard()
+        updateCompactHeight()
     }
 
     func refreshClipboard() {
@@ -711,6 +968,7 @@ final class AppModel: ObservableObject {
         query = seed
         if seed.isEmpty { refreshEmoji() }
         focusSeed &+= 1
+        updateCompactHeight()
     }
 
     func refreshEmoji() {
@@ -740,6 +998,7 @@ final class AppModel: ObservableObject {
         if let seed, !seed.isEmpty {
             chatInput = seed
         }
+        updateCompactHeight()
     }
 
     /// Tab from search: go straight to Quick AI *and* fire the prompt —
@@ -747,6 +1006,7 @@ final class AppModel: ObservableObject {
     func quickAsk(_ prompt: String) {
         mode = .aiChat
         query = ""
+        updateCompactHeight()
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !chatBusy else { return }
         chatInput = trimmed
@@ -763,6 +1023,7 @@ final class AppModel: ObservableObject {
         extActionPanelOpen = false
         extFormValues = [:]
         services.extensions.launch(ref: ref)
+        updateCompactHeight()
     }
 
     func closeExtension() {
@@ -787,14 +1048,40 @@ final class AppModel: ObservableObject {
             services.clipboard.paste(entry)
         }
         services.search.usage.record(id: "clip:\(entry.kind.rawValue)")
+        finishPaste(trusted: trusted)
+    }
+
+    /// Paste a raw string into the frontmost app (snippets). Same pipeline:
+    /// write, hide, ⌘V — Accessibility-gated with an honest fallback.
+    func pasteTextToActiveApp(_ text: String) {
+        let trusted = AccessibilityHelper.isTrusted()
+        copyToClipboard(text)
+        finishPaste(trusted: trusted)
+    }
+
+    /// Shared tail of every paste path: hide, wait for keyboard focus to
+    /// leave UltraCMD, then post ⌘V (or explain what to do without the AX
+    /// grant).
+    private func finishPaste(trusted: Bool) {
         hideLauncher()
-        if trusted {
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 180_000_000)
-                Self.postCommandV()
-            }
-        } else {
+        pasteAccessibilityTrusted = trusted
+        guard trusted else {
             showToast(style: .regular, title: "Copied — press ⌘V", message: "Grant Accessibility for automatic pasting", duration: 3)
+            return
+        }
+        Task { @MainActor in
+            // Wait until no UltraCMD window holds keyboard focus (the panel
+            // resigned key and the system handed focus back to the target
+            // app) before posting the keystroke — a fixed delay either raced
+            // slow focus transfers or made every paste feel sluggish.
+            var waitedMs = 0
+            while NSApp.keyWindow != nil, waitedMs < 600 {
+                try? await Task.sleep(nanoseconds: 30_000_000)
+                waitedMs += 30
+            }
+            // One extra frame so the target's text field is first responder.
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            Self.postCommandV()
         }
     }
 
@@ -840,6 +1127,94 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// ⌘K "Delete older than…" — bulk cleanup by time window, pinned kept.
+    func requestBulkDeleteClipboard(cutoff: Date, label: String) {
+        confirmRequest = ConfirmRequest(
+            title: "Delete entries from before \(label)?",
+            message: "Pinned entries are kept. This cannot be undone.",
+            confirmLabel: "Delete",
+            isDestructive: true
+        ) { [weak self] in
+            guard let self else { return }
+            let removed = self.services.clipboard.deleteOlder(than: cutoff)
+            self.refreshClipboard()
+            self.showToast(
+                style: .success,
+                title: removed == 0 ? "Nothing to delete" : "Deleted \(removed) entr\(removed == 1 ? "y" : "ies")"
+            )
+        }
+    }
+
+    /// Copy the Vision-extracted text of an image entry.
+    func copyOCRText(from entry: ClipEntry) {
+        guard let text = entry.ocrText else {
+            showToast(style: .regular, title: "No recognized text in this image")
+            return
+        }
+        copyToClipboard(text)
+        showToast(style: .success, title: "Recognized text copied", message: String(text.prefix(60)))
+    }
+
+    // MARK: Paste queue ("paste sequentially")
+
+    /// Queue an entry; each "paste next" writes it, hides the launcher and
+    /// posts ⌘V — fill multi-field forms one entry at a time.
+    func addToPasteQueue(_ entry: ClipEntry) {
+        if !pasteQueue.contains(where: { $0.id == entry.id }) {
+            pasteQueue.append(entry)
+        }
+        showToast(
+            style: .success,
+            title: "Queued — \(pasteQueue.count) in queue",
+            message: pasteQueueHotkeyHint
+        )
+    }
+
+    func clearPasteQueue() {
+        let count = pasteQueue.count
+        pasteQueue = []
+        if count > 0 {
+            showToast(style: .regular, title: "Paste queue cleared (\(count))")
+        }
+    }
+
+    /// ⌘⇧V: paste the oldest queued entry and drop it from the queue.
+    func pasteNextFromQueue() {
+        guard !pasteQueue.isEmpty else {
+            showToast(style: .regular, title: "Paste queue is empty", message: "Queue entries via ⌘K → Paste Sequentially")
+            return
+        }
+        let entry = pasteQueue.removeFirst()
+        pasteClipboardEntry(entry)
+    }
+
+    private var pasteQueueHotkeyHint: String {
+        SettingsStore.shared.pasteQueueHotkeyEnabled ? "⌘⇧V anywhere pastes the next" : "⌘⇧V in the launcher pastes the next"
+    }
+
+    // MARK: Favorites
+
+    /// ⌘F on the selected root result.
+    @discardableResult
+    func toggleFavoriteOnSelection() -> Bool? {
+        guard mode == .root, results.indices.contains(selectedIndex) else { return nil }
+        let item = results[selectedIndex].item
+        let nowFavorite = SettingsStore.shared.toggleFavorite(item.id)
+        if query.isEmpty {
+            refreshResults() // favorites section re-renders immediately
+        }
+        showToast(
+            style: .success,
+            title: nowFavorite ? "Added to Favorites" : "Removed from Favorites",
+            message: item.title
+        )
+        return nowFavorite
+    }
+
+    func isFavorite(_ id: String) -> Bool {
+        SettingsStore.shared.isFavorite(id)
+    }
+
     /// Finder for file/image payloads, Application Support for text.
     func revealClipboardEntry(_ entry: ClipEntry) {
         guard let path = entry.revealablePath else {
@@ -867,7 +1242,7 @@ final class AppModel: ObservableObject {
         case .text, .url, .color:
             let temp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("ultracmd-clip-\(entry.id.uuidString.prefix(6)).txt")
-            try? (entry.text ?? entry.preview).write(to: temp, atomically: true, encoding: .utf8)
+            try? (entry.fullText ?? entry.preview).write(to: temp, atomically: true, encoding: .utf8)
             url = temp
         }
         let process = Process()
@@ -904,7 +1279,7 @@ final class AppModel: ObservableObject {
                 wrote = (try? FileManager.default.copyItem(atPath: path, toPath: target.path)) != nil
             } else { wrote = false }
         default:
-            wrote = (try? (entry.text ?? entry.preview).write(to: target, atomically: true, encoding: .utf8)) != nil
+            wrote = (try? (entry.fullText ?? entry.preview).write(to: target, atomically: true, encoding: .utf8)) != nil
         }
         showToast(style: wrote ? .success : .failure, title: wrote ? "Saved to \(target.lastPathComponent)" : "Could not save file")
     }
@@ -1140,13 +1515,17 @@ final class AppModel: ObservableObject {
         case .root:
             guard results.indices.contains(selectedIndex) else { return "Open" }
             switch results[selectedIndex].item.kind {
-            case .application, .file, .folder, .preferencePane: return "Open"
+            case .application, .file, .folder, .preferencePane, .quicklink: return "Open"
             case .calculator, .emoji: return "Copy"
-            case .clipboardEntry: return "Paste"
+            case .clipboardEntry, .snippet: return "Paste"
             default: return "Run"
             }
         case .clipboard:
-            return "Paste to \(pasteTargetName ?? "Active App")"
+            // Tell the truth about what ↵ will do: without Accessibility we
+            // can only copy — the pill becomes the one-time fix affordance.
+            return pasteAccessibilityTrusted
+                ? "Paste to \(pasteTargetName ?? "Active App")"
+                : "Enable Auto-Paste…"
         case .aiChat:
             return chatBusy ? "Stop" : "Ask"
         case .emojiPage:
@@ -1165,8 +1544,15 @@ final class AppModel: ObservableObject {
                 runRootItem(results[selectedIndex])
             }
         case .clipboard:
-            if let entry = selectedClipEntry {
+            guard let entry = selectedClipEntry else { return }
+            if pasteAccessibilityTrusted {
                 pasteClipboardEntry(entry)
+            } else {
+                // Still useful (entry is copied), and the user is one grant
+                // away from real pasting — take them straight there.
+                copyClipboardEntry(entry)
+                AccessibilityHelper.openAccessibilitySettings()
+                showToast(style: .regular, title: "Copied — press ⌘V", message: "Grant Accessibility, then Enter pastes automatically", duration: 5)
             }
         case .aiChat:
             if chatBusy {
@@ -1323,7 +1709,24 @@ final class AppModel: ObservableObject {
                 guard let entry = self?.selectedClipEntry else { return }
                 self?.pasteClipboardEntry(entry, plainText: true)
             },
+            PanelAction(title: "Paste Sequentially — Add to Queue", icon: "list.number", shortcut: "⇧⌘A") { [weak self] in
+                guard let entry = self?.selectedClipEntry else { return }
+                self?.addToPasteQueue(entry)
+            },
         ]
+        if !pasteQueue.isEmpty {
+            actions.append(PanelAction(title: "Paste Next from Queue (\(pasteQueue.count) left)", icon: "arrow.down.app", shortcut: "⇧⌘V") { [weak self] in
+                self?.pasteNextFromQueue()
+            })
+            actions.append(PanelAction(title: "Clear Paste Queue", icon: "xmark.circle") { [weak self] in
+                self?.clearPasteQueue()
+            })
+        }
+        if entry.kind == .image, entry.ocrText != nil {
+            actions.append(PanelAction(title: "Copy Recognized Text", icon: "doc.text.viewfinder") { [weak self] in
+                self?.copyOCRText(from: entry)
+            })
+        }
         if entry.kind == .rtf || entry.kind == .image || entry.kind == .file {
             actions.append(PanelAction(title: "Reveal in Finder", icon: "folder", shortcut: "⌘R") { [weak self] in
                 self?.revealClipboardEntry(entry)
@@ -1335,6 +1738,12 @@ final class AppModel: ObservableObject {
         actions.append(PanelAction(title: "Save as File…", icon: "square.and.arrow.down") { [weak self] in
             self?.saveClipboardEntryAsFile(entry)
         })
+        if !pasteAccessibilityTrusted {
+            actions.append(PanelAction(title: "Enable Auto-Paste…", icon: "hand.raised") { [weak self] in
+                AccessibilityHelper.openAccessibilitySettings()
+                self?.showToast(style: .regular, title: "Grant Accessibility", message: "Then reopen the launcher — Enter will paste automatically", duration: 5)
+            })
+        }
         actions.append(PanelAction.separator())
         actions.append(PanelAction(title: entry.isPinned ? "Unpin Entry" : "Pin Entry", icon: "pin", shortcut: "⌘.") { [weak self] in
             self?.togglePinClipboardEntry(entry)
@@ -1342,6 +1751,14 @@ final class AppModel: ObservableObject {
         actions.append(PanelAction.separator())
         actions.append(PanelAction(title: "Delete Entry", icon: "trash", shortcut: "⌘X", isDestructive: true) { [weak self] in
             self?.deleteClipboardEntry(entry)
+        })
+        actions.append(PanelAction(title: "Delete Older Than 7 Days…", icon: "calendar.badge.minus", isDestructive: true) { [weak self] in
+            guard let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) else { return }
+            self?.requestBulkDeleteClipboard(cutoff: cutoff, label: "the last 7 days")
+        })
+        actions.append(PanelAction(title: "Delete Older Than 30 Days…", icon: "calendar.badge.minus", isDestructive: true) { [weak self] in
+            guard let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: Date()) else { return }
+            self?.requestBulkDeleteClipboard(cutoff: cutoff, label: "the last 30 days")
         })
         actions.append(PanelAction(title: "Delete All Entries…", icon: "trash.slash", isDestructive: true) { [weak self] in
             self?.requestClearClipboard()
@@ -1362,6 +1779,13 @@ final class AppModel: ObservableObject {
         actions.append(PanelAction(title: primaryTitle, icon: primaryIcon(for: item)) { [weak self] in
             guard let self, self.results.indices.contains(self.selectedIndex) else { return }
             self.runRootItem(self.results[self.selectedIndex])
+        })
+        actions.append(PanelAction(
+            title: isFavorite(item.id) ? "Remove from Favorites" : "Add to Favorites",
+            icon: "star",
+            shortcut: "⌘F"
+        ) { [weak self] in
+            _ = self?.toggleFavoriteOnSelection()
         })
         switch item.kind {
         case .application:
@@ -1415,6 +1839,40 @@ final class AppModel: ObservableObject {
             })
         case .calculator:
             break
+        case .quicklink:
+            actions.append(PanelAction(title: "Copy URL", icon: "doc.on.doc") { [weak self] in
+                self?.copyToClipboard(item.url ?? item.title)
+                self?.showToast(style: .success, title: "URL copied")
+            })
+            actions.append(PanelAction(title: "Open in Default Browser", icon: "safari") { [weak self] in
+                guard let self, self.results.indices.contains(self.selectedIndex) else { return }
+                self.runRootItem(self.results[self.selectedIndex])
+            })
+            actions.append(PanelAction(title: "Delete Quicklink…", icon: "trash", isDestructive: true) { [weak self] in
+                guard let self else { return }
+                let linkID = String(item.id.dropFirst("quicklink:".count))
+                if let link = self.services.quicklinks.links.first(where: { $0.id.uuidString == linkID }) {
+                    self.services.quicklinks.delete(id: link.id)
+                }
+                self.refreshResults()
+            })
+        case .snippet:
+            actions.append(PanelAction(title: "Copy Body", icon: "doc.on.doc") { [weak self] in
+                guard let self else { return }
+                let snippetID = String(item.id.dropFirst("snippet:".count))
+                if let snippet = self.services.snippets.snippets.first(where: { $0.id.uuidString == snippetID }) {
+                    self.copyToClipboard(snippet.body)
+                    self.showToast(style: .success, title: "Snippet copied")
+                }
+            })
+            actions.append(PanelAction(title: "Delete Snippet…", icon: "trash", isDestructive: true) { [weak self] in
+                guard let self else { return }
+                let snippetID = String(item.id.dropFirst("snippet:".count))
+                if let snippet = self.services.snippets.snippets.first(where: { $0.id.uuidString == snippetID }) {
+                    self.services.snippets.delete(id: snippet.id)
+                }
+                self.refreshResults()
+            })
         default:
             actions.append(PanelAction(title: "Copy Title", icon: "text.quote") { [weak self] in
                 self?.copyToClipboard(item.title)
@@ -1529,6 +1987,34 @@ final class AppModel: ObservableObject {
             return true
         }
 
+        // Standard window/app equivalents. The launcher panel is a borderless
+        // NSPanel with no main-menu representation, so ⌘W/⌘Q must be routed
+        // here (mirrors the programmatic main menu used by the real windows).
+        if hasCmd && chars == "w" {
+            hideLauncher()
+            return true
+        }
+        if hasCmd && chars == "q" {
+            NSApp.terminate(nil)
+            return true
+        }
+
+        // Favorites (⌘F): pin the selected root result to the empty view.
+        if hasCmd && !mods.contains(.shift) && chars == "f", mode == .root {
+            return toggleFavoriteOnSelection() != nil
+        }
+
+        // Paste queue: ⇧⌘V pastes the next queued entry; ⇧⌘A queues the
+        // clipboard selection. Key codes (not characters) — shift-safe.
+        if hasCmd && mods.contains(.shift) && event.keyCode == 9, mode == .root || mode == .clipboard {
+            pasteNextFromQueue()
+            return true
+        }
+        if hasCmd && mods.contains(.shift) && event.keyCode == 0, mode == .clipboard, let entry = selectedClipEntry {
+            addToPasteQueue(entry)
+            return true
+        }
+
         // KeyCodes consumed but never appended to a panel filter
         // (tab, left/right/home/end/pgup/pgdn/del/help + F-keys).
         let swallowedNavKeys: Set<UInt16> = [48, 115, 116, 117, 119, 121, 123, 124]
@@ -1632,6 +2118,23 @@ final class AppModel: ObservableObject {
             }
         }
 
+        // Emacs-style list navigation (Ctrl+N / Ctrl+P).
+        if mods.contains(.control), !hasCmd, !mods.contains(.option) {
+            if chars == "n" { return handleArrow(1) }
+            if chars == "p" { return handleArrow(-1) }
+        }
+
+        // ⌘Esc — pop to root from anywhere, clearing the query.
+        if hasCmd, event.keyCode == 53 {
+            if mode != .root {
+                returnToRoot()
+            } else if !query.isEmpty {
+                query = ""
+                searchPlaceholderOverride = nil
+            }
+            return true
+        }
+
         switch event.keyCode {
         case 53: // escape
             return handleEscape()
@@ -1653,8 +2156,12 @@ final class AppModel: ObservableObject {
             }
             return false
         case 126: // up
+            if hasCmd { return jumpSelection(-8) }
+            if mods.contains(.option) { return jumpToEdge(top: true) }
             return handleArrow(-1)
         case 125: // down
+            if hasCmd { return jumpSelection(8) }
+            if mods.contains(.option) { return jumpToEdge(top: false) }
             return handleArrow(1)
         case 123: // left
             if mode == .emojiPage { return moveEmojiSelection(-1) }
@@ -1663,13 +2170,28 @@ final class AppModel: ObservableObject {
             if mode == .emojiPage { return moveEmojiSelection(1) }
             return false
         case 51: // delete/backspace
-            if mode == .root && query.isEmpty {
-                hideLauncher()
-                return true
-            }
-            if mode == .emojiPage && query.isEmpty {
-                returnToRoot()
-                return true
+            // Raycast semantics: backspace on an *empty* input navigates back
+            // a level; at root it is a no-op. Dismissing the launcher is
+            // Escape's job — a stray backspace right after summoning must
+            // never close the panel.
+            switch mode {
+            case .root:
+                return false
+            case .clipboard, .emojiPage:
+                if query.isEmpty {
+                    returnToRoot()
+                    return true
+                }
+            case .aiChat:
+                if chatInput.isEmpty {
+                    returnToRoot()
+                    return true
+                }
+            case .extensionView:
+                if extQuery.isEmpty {
+                    closeExtension()
+                    return true
+                }
             }
             return false
         default:
@@ -1871,6 +2393,42 @@ final class AppModel: ObservableObject {
     private func moveIndex(_ index: inout Int, count: Int, _ delta: Int) {
         guard count > 0 else { return }
         index = (index + delta + count) % count
+    }
+
+    /// ⌘↑/⌘↓ — page jump (clamped, no wrap).
+    private func jumpSelection(_ delta: Int) -> Bool {
+        switch mode {
+        case .root:
+            guard !results.isEmpty else { return false }
+            selectedIndex = min(max(selectedIndex + delta, 0), results.count - 1)
+            return true
+        case .clipboard:
+            guard !clipboardResults.isEmpty else { return false }
+            clipboardSelectedIndex = min(max(clipboardSelectedIndex + delta, 0), clipboardResults.count - 1)
+            return true
+        case .emojiPage:
+            return moveEmojiSelection(delta / 2 * emojiColumns)
+        default:
+            return false
+        }
+    }
+
+    /// ⌥↑/⌥↓ — jump to the first/last row.
+    private func jumpToEdge(top: Bool) -> Bool {
+        switch mode {
+        case .root:
+            guard !results.isEmpty else { return false }
+            selectedIndex = top ? 0 : results.count - 1
+            return true
+        case .clipboard:
+            guard !clipboardResults.isEmpty else { return false }
+            clipboardSelectedIndex = top ? 0 : clipboardResults.count - 1
+            return true
+        case .emojiPage:
+            return moveEmojiSelection(top ? -(1 << 24) : (1 << 24))
+        default:
+            return false
+        }
     }
 
     private func triggerIndex(_ index: Int) -> Bool {

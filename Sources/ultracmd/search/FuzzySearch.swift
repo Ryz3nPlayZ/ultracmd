@@ -23,7 +23,9 @@ enum FuzzySearch {
         queryLower: String,
         titleLower: String,
         subtitleLower: String?,
-        keywordsLower: [String]
+        keywordsLower: [String],
+        subtitleWeight: (String) -> Double = { _ in 0.55 },
+        keywordWeight: (String) -> Double = { _ in 0.7 }
     ) -> Match? {
         var best: Match?
         var bestScore = -Double.infinity
@@ -32,14 +34,16 @@ enum FuzzySearch {
             best = m
             bestScore = m.score
         }
-        // Secondary fields score at a discount.
+        // Secondary fields score at a discount; the weight closures are only
+        // invoked for fields that actually matched, so callers can back them
+        // with corpus statistics (IDF-lite) without paying for the misses.
         if let subtitleLower, let m = match(queryLower: queryLower, textLower: subtitleLower) {
-            let s = m.score * 0.55
+            let s = m.score * subtitleWeight(subtitleLower)
             if s > bestScore { best = Match(score: s, indices: m.indices); bestScore = s }
         }
         for kwLower in keywordsLower {
             guard let m = match(queryLower: queryLower, textLower: kwLower) else { continue }
-            let s = m.score * 0.7
+            let s = m.score * keywordWeight(kwLower)
             if s > bestScore { best = Match(score: s, indices: m.indices); bestScore = s }
         }
         return best

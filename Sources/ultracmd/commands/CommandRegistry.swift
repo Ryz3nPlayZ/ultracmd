@@ -154,6 +154,81 @@ final class CommandRegistry {
             )
         ) { self.runAppleScript("tell application \"Finder\" to empty trash") })
 
+        // Connectivity & sound toggles (best-effort, outcome-toasted).
+        list.append(CommandItem(
+            item: SearchItem(
+                id: "cmd:system:wifi", title: "Toggle Wi-Fi",
+                subtitle: "Turn Wi-Fi on or off",
+                kind: .systemAction, icon: .symbol("wifi"),
+                keywords: ["wifi", "wi-fi", "wireless", "network", "internet", "toggle"]
+            )
+        ) { [weak model] in
+            SystemToggles.toggleWiFi { on in
+                switch on {
+                case true: model?.showToast(style: .success, title: "Wi-Fi On")
+                case false: model?.showToast(style: .success, title: "Wi-Fi Off")
+                case nil: model?.showToast(style: .failure, title: "Couldn't toggle Wi-Fi", message: "networksetup failed")
+                }
+            }
+        })
+        list.append(CommandItem(
+            item: SearchItem(
+                id: "cmd:system:bluetooth", title: "Toggle Bluetooth",
+                subtitle: "Via blueutil, or open its settings pane",
+                kind: .systemAction, icon: .symbol("dot.radiowaves.left.and.right"),
+                keywords: ["bluetooth", "bt", "wireless", "headphones", "toggle"]
+            )
+        ) { [weak model] in
+            SystemToggles.toggleBluetooth { on in
+                switch on {
+                case true: model?.showToast(style: .success, title: "Bluetooth On")
+                case false: model?.showToast(style: .success, title: "Bluetooth Off")
+                case nil: model?.showToast(style: .regular, title: "Bluetooth pane opened", message: "Install blueutil for one-key toggling")
+                }
+            }
+        })
+        list.append(CommandItem(
+            item: SearchItem(
+                id: "cmd:system:focus", title: "Toggle Do Not Disturb",
+                subtitle: "Focus mode via Control Center",
+                kind: .systemAction, icon: .symbol("moon.fill"),
+                keywords: ["dnd", "focus", "disturb", "notification", "silent", "toggle"]
+            )
+        ) { [weak model] in
+            model?.hideLauncher()
+            SystemToggles.toggleFocus { ok in
+                if ok == nil {
+                    model?.showToast(style: .failure, title: "Couldn't toggle Focus", message: "Control Center UI scripting failed — needs Accessibility")
+                }
+            }
+        })
+        list.append(CommandItem(
+            item: SearchItem(
+                id: "cmd:system:volume", title: "Set Volume",
+                subtitle: "Type: volume 50",
+                kind: .command, icon: .symbol("speaker.wave.2.fill"),
+                keywords: ["volume", "sound", "audio", "louder", "quieter"]
+            )
+        ) { [weak model] in
+            model?.openTemplate(hint: "volume ", placeholder: "Volume 0–100…")
+        })
+        list.append(CommandItem(
+            item: SearchItem(
+                id: "cmd:system:mute", title: "Toggle Mute",
+                subtitle: "Mute or unmute the output device",
+                kind: .systemAction, icon: .symbol("speaker.slash.fill"),
+                keywords: ["mute", "unmute", "silent", "volume", "sound"]
+            )
+        ) { [weak model] in
+            SystemToggles.toggleMute { muted in
+                switch muted {
+                case true: model?.showToast(style: .success, title: "Muted")
+                case false: model?.showToast(style: .success, title: "Unmuted")
+                case nil: model?.showToast(style: .failure, title: "Couldn't toggle mute")
+                }
+            }
+        })
+
         // Appearance: toggle + explicit targets.
         list.append(CommandItem(
             item: SearchItem(
@@ -326,6 +401,36 @@ final class CommandRegistry {
         ) { [weak model] in
             model?.openEmojiPage()
         })
+
+        // --- User items (quicklinks / snippets) --------------------------------
+        list.append(CommandItem(
+            item: SearchItem(
+                id: "cmd:tools:quicklink", title: "Create Quicklink",
+                subtitle: "Type: quicklink Docs https://…/{query}",
+                kind: .command, icon: .symbol("link.badge.plus"),
+                keywords: ["quicklink", "link", "bookmark", "url", "create"]
+            )
+        ) { [weak model] in
+            model?.openTemplate(hint: "quicklink ", placeholder: "Name + URL ({query} = live search)…")
+        })
+        list.append(CommandItem(
+            item: SearchItem(
+                id: "cmd:tools:snippet", title: "Create Snippet",
+                subtitle: "Type: snippet Signature :: Best, Alex",
+                kind: .command, icon: .symbol("text.badge.plus"),
+                keywords: ["snippet", "text", "template", "expansion", "create"]
+            )
+        ) { [weak model] in
+            model?.openTemplate(hint: "snippet ", placeholder: "Name :: body ({clipboard} inserts clipboard)…")
+        })
+        list.append(CommandItem(
+            item: SearchItem(
+                id: "cmd:tools:useritems", title: "Manage Quicklinks & Snippets",
+                subtitle: "Edit or remove saved items in Settings",
+                kind: .command, icon: .symbol("square.and.pencil"),
+                keywords: ["manage", "quicklink", "snippet", "favorites", "edit"]
+            )
+        ) { [weak model] in model?.onOpenSettings() })
 
         // --- App utilities ------------------------------------------------------
         list.append(CommandItem(

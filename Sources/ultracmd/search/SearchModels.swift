@@ -7,6 +7,8 @@ enum ItemIcon: Equatable {
     case image(URL)
     /// Renders the raw text (emoji glyphs) as the icon.
     case text(String)
+    /// Filled color swatch ("#RRGGBB") — calculator color answers.
+    case color(String)
 
     static func == (lhs: ItemIcon, rhs: ItemIcon) -> Bool {
         switch (lhs, rhs) {
@@ -15,6 +17,7 @@ enum ItemIcon: Equatable {
         case let (.file(a), .file(b)): return a == b
         case let (.image(a), .image(b)): return a == b
         case let (.text(a), .text(b)): return a == b
+        case let (.color(a), .color(b)): return a == b
         default: return false
         }
     }
@@ -33,6 +36,8 @@ enum SearchItemKind: String, Codable {
     case bookmark
     case systemAction
     case emoji
+    case quicklink
+    case snippet
 }
 
 /// A single addressable item in the unified search index.

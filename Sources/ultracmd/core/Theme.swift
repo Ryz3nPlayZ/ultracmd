@@ -20,27 +20,38 @@ enum Theme {
     /// vibrancy; the backdrop's true colors read through unchanged.
     static let hudTint = Color(white: 0.085)
 
-    /// Launcher overlay opacity driven by the Dark Tint setting (~75% at the
-    /// 0.60 default), clamped to a sensible glass range.
+    /// Launcher overlay opacity driven by the Dark Tint setting. The range
+    /// stays translucent enough that the vibrancy backdrop (and on macOS 26
+    /// the real glass material) still reads as glass, not flat charcoal.
     static var hudOverlayOpacity: Double {
-        min(max(Theme.darkTintOpacity + 0.15, 0.45), 0.92)
+        min(max(Theme.darkTintOpacity + 0.10, 0.40), 0.82)
     }
 
-    /// Row metrics scale with Settings → Appearance → Interface Size.
+    /// Row metrics scale with Settings → Appearance → Interface Size. The
+    /// default is the compact Raycast-like density; the larger steps remain
+    /// for accessibility.
     static var rowHeight: CGFloat {
         switch SettingsStore.shared.interfaceSizeIndex {
-        case 2: return 54
-        case 1: return 50
-        default: return 46
+        case 2: return 52
+        case 1: return 46
+        default: return 40
         }
     }
     static var rowTitleSize: CGFloat {
         switch SettingsStore.shared.interfaceSizeIndex {
         case 2: return 15
-        case 1: return 14.5
-        default: return 14
+        case 1: return 14
+        default: return 13.5
         }
     }
+
+    /// Shared chrome metrics — every surface (root list, clipboard split,
+    /// extensions, emoji grid) draws these from one place so density stays
+    /// consistent everywhere.
+    static let searchBarHeight: CGFloat = 52
+    static let searchFontSize: CGFloat = 19
+    static let footerPillHeight: CGFloat = 30
+    static let sectionHeaderSize: CGFloat = 10
 
     /// Dark matte Quick AI canvas (near-opaque charcoal over the vibrancy).
     static let chatCanvas = Color(white: 0.105)  // ≈ #1B1B1B, neutral
@@ -191,6 +202,15 @@ enum ItemIconView {
         case .text(let glyph):
             Text(glyph)
                 .font(.system(size: 19))
+                .frame(width: 26, height: 26)
+        case .color(let hex):
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color(hex: hex) ?? .white)
+                .frame(width: 20, height: 20)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.25), lineWidth: 0.5)
+                )
                 .frame(width: 26, height: 26)
         case .app(let bundleID, let path):
             if let nsImage = AppIconCache.icon(bundleID: bundleID, path: path) {

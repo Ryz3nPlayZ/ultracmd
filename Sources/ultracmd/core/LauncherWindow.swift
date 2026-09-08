@@ -31,7 +31,10 @@ final class OverlayLauncherWindow: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
-        level = .floating
+        // Above the menu-bar level (per the overlay-shell spec): keeps the
+        // launcher above full-screen apps, menu-bar duplicates and normal
+        // windows without activating them.
+        level = .mainMenu + 1
         isMovableByWindowBackground = true
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         hidesOnDeactivate = false
@@ -117,13 +120,19 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
     private let model: AppModel
     private var localKeyMonitor: Any?
     private var mouseUpMonitor: Any?
+    private var heightCancellable: Any?
     private let guideOverlay = GuideOverlayController()
 
-    /// Window geometry: height fixed, width follows the Appearance → Window
-    /// Mode preset (compact / expanded); the list scrolls inside.
-    private let windowHeight: CGFloat = 540
+    /// Window geometry: full height for any populated surface; a short
+    /// "compact" height while root search is empty (Raycast's compact
+    /// preset). Width follows the Appearance → Window Mode preset.
+    private let fullWindowHeight: CGFloat = 480
+    private let compactWindowHeight: CGFloat = 300
     private var windowWidth: CGFloat {
         SettingsStore.shared.launcherSizeMode == 0 ? 640 : 760
+    }
+    private var windowHeight: CGFloat {
+        model.compactHeightActive ? compactWindowHeight : fullWindowHeight
     }
 
     /// True while we move the window programmatically so windowDidMove
@@ -131,10 +140,13 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
     private var isProgrammaticMove = false
     /// Debounced persist of the dragged origin.
     private var originSaveTask: Task<Void, Never>?
+    /// Bumped on every show/hide so a stale hide-animation completion can
+    /// never order the window out after a newer show re-opened it.
+    private var visibilityGeneration = 0
 
     init(model: AppModel) {
         self.model = model
-        let frame = LauncherWindowController.computeFrame(width: 760, height: windowHeight)
+        let frame = LauncherWindowController.computeFrame(width: 760, height: 480)
         window = OverlayLauncherWindow(contentRect: frame)
 
         super.init()
@@ -147,30 +159,85 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
         window.contentView?.addSubview(host)
 
         model.launcherWindow = window
+        // All hide paths (Esc, ⌘W, paste, mode switches) go through the
+        // controller so teardown + animation always run.
+        model.onLauncherHide = { [weak self] in self?.hide() }
         installKeyMonitor()
         installMouseUpMonitor()
+        installHeightObserver()
+    }
+
+    /// Compact window mode: animate the frame height when the model flips
+    /// between the empty root (short) and everything else (full). The top
+    /// edge stays put so the panel grows downward — no jump against the
+    /// focused text field underneath.
+    private func installHeightObserver() {
+        heightCancellable = model.$compactHeightActive
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] compact in
+                guard let self, self.window.isVisible else { return }
+                let height = compact ? self.compactWindowHeight : self.fullWindowHeight
+                var frame = self.window.frame
+                guard abs(frame.height - height) > 0.5 else { return }
+                frame.origin.y = frame.maxY - height
+                frame.size.height = height
+                self.isProgrammaticMove = true
+                NSAnimationContext.runAnimationGroup({ context in
+                    context.duration = 0.18
+                    context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    self.window.animator().setFrame(frame, display: true)
+                }, completionHandler: { [weak self] in
+                    self?.isProgrammaticMove = false
+                })
+            }
     }
 
     var isVisible: Bool { window.isVisible }
 
     func show() {
+        visibilityGeneration &+= 1
+        // Reset state first so the frame below reflects the *fresh* compact
+        // mode decision (empty root query → short window).
+        model.prepareForDisplay()
         isProgrammaticMove = true
         window.setFrame(restoredFrame(width: windowWidth, height: windowHeight), display: false)
         isProgrammaticMove = false
         window.updateChrome()
-        model.prepareForDisplay()
         // Non-activating panel: takes keyboard focus without activating the
         // app, so the frontmost app's focus context stays intact.
         window.makeKeyAndOrderFront(nil)
         // Order front later too — Space switches can race the ordering.
         window.orderFrontRegardless()
+        // Soft fade-in (0.13s easeOut) — the panel materializes instead of
+        // blinking in at full opacity.
+        let generation = visibilityGeneration
+        window.alphaValue = 0
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.13
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            window.animator().alphaValue = 1
+        }, completionHandler: { [weak self] in
+            guard let self, self.visibilityGeneration == generation else { return }
+            self.window.alphaValue = 1
+        })
     }
 
     func hide() {
+        visibilityGeneration &+= 1
         model.teardownForHide()
         model.snapGuides = .init()
         guideOverlay.hide()
-        window.orderOut(nil)
+        let generation = visibilityGeneration
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.10
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            window.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self, self.visibilityGeneration == generation else { return }
+            self.window.orderOut(nil)
+            self.window.alphaValue = 1
+        })
     }
 
     func toggle() {

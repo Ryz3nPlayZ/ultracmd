@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import Combine
 import SwiftUI
 
 @MainActor
@@ -10,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkey: HotkeyCenter!
     private var settingsWindow: NSWindow?
     private var chatWindow: NSWindow?
+    private var settingsObserver: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         model = AppModel()
@@ -19,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         launcher = LauncherWindowController(model: model)
 
         setupStatusBar()
+        setupMainMenu()
         setupHotkey()
 
         model.services.clipboard.startWatching()
@@ -46,6 +49,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+        true
+    }
+
     // MARK: Status bar
 
     private func setupStatusBar() {
@@ -53,14 +60,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.image = NSImage(systemSymbolName: "command.square.fill", accessibilityDescription: "UltraCMD")
 
         let menu = NSMenu()
-        menu.addItem(withTitle: "Open UltraCMD", action: #selector(toggleLauncher), keyEquivalent: "")
+        // Targets are assigned per item: `terminate(_:)` belongs to NSApp, so
+        // pointing it at the delegate (which doesn't implement the selector)
+        // would leave NSMenu auto-validation greyed out forever.
+        let openItem = menu.addItem(withTitle: "Open UltraCMD", action: #selector(toggleLauncher), keyEquivalent: "")
+        openItem.target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
-        menu.addItem(withTitle: "Extensions Folder", action: #selector(openExtensionsFolder), keyEquivalent: "")
+        let settingsItem = menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        let extensionsItem = menu.addItem(withTitle: "Extensions Folder", action: #selector(openExtensionsFolder), keyEquivalent: "")
+        extensionsItem.target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit UltraCMD", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        for item in menu.items { item.target = self }
+        let quitItem = menu.addItem(withTitle: "Quit UltraCMD", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quitItem.target = NSApp
         statusItem.menu = menu
+    }
+
+    /// Minimal programmatic main menu. Accessory apps show no menu bar, but
+    /// installing one gives the real windows (Settings, AI Chat) their
+    /// standard ⌘Q / ⌘W / ⌘M key equivalents.
+    private func setupMainMenu() {
+        let main = NSMenu()
+
+        let appMenuItem = NSMenuItem(title: "UltraCMD", action: nil, keyEquivalent: "")
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "About UltraCMD", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        let settingsItem = appMenu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Hide UltraCMD", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Quit UltraCMD", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenuItem.submenu = appMenu
+        main.addItem(appMenuItem)
+
+        let windowMenuItem = NSMenuItem(title: "Window", action: nil, keyEquivalent: "")
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+        windowMenuItem.submenu = windowMenu
+        main.addItem(windowMenuItem)
+
+        NSApp.mainMenu = main
     }
 
     // MARK: Hotkey
@@ -69,12 +113,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey = HotkeyCenter()
         applyHotkey()
         model.onHotkeyChanged = { [weak self] in self?.applyHotkey() }
+        settingsObserver = SettingsStore.shared.objectWillChange
+            .sink { [weak self] _ in self?.applyPasteQueueHotkey() }
+        applyPasteQueueHotkey()
     }
 
     private func applyHotkey() {
         let combo = SettingsStore.shared.hotkeyCombination
         hotkey.register(keyCode: combo.keyCode, modifiers: combo.carbonModifiers) { [weak self] in
             self?.toggleLauncher()
+        }
+    }
+
+    /// Opt-in ⇧⌘V "paste next from queue" (Settings → Clipboard).
+    private func applyPasteQueueHotkey() {
+        if SettingsStore.shared.pasteQueueHotkeyEnabled {
+            let combo = HotkeyCombination.pasteNext
+            hotkey.registerSecondary(keyCode: combo.keyCode, modifiers: combo.carbonModifiers) { [weak self] in
+                self?.handlePasteQueueHotkey()
+            }
+        } else {
+            hotkey.unregisterSecondary()
+        }
+    }
+
+    private func handlePasteQueueHotkey() {
+        if model.pasteQueue.isEmpty {
+            // Summon so the "queue is empty" toast is actually visible.
+            launcher.show()
+            model.pasteNextFromQueue()
+        } else if AccessibilityHelper.isTrusted() {
+            model.pasteNextFromQueue()
+        } else {
+            launcher.show()
+            model.showToast(style: .regular, title: "Copied — press ⌘V", message: "Grant Accessibility for automatic pasting", duration: 3)
         }
     }
 
@@ -94,20 +166,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        // Standard titled window: the NavigationSplitView sidebar + List
-        // render their own system materials (glass, tint, selection) — no
-        // custom vibrancy, no custom hue.
-        let w = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 780, height: 640),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
+        // Glass HUD window — same design language as the launcher itself
+        // (the previous native NavigationSplitView shell read as a different
+        // app). Custom sidebar/detail inside; system controls on top.
+        let w = makeHUDWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 660),
+            minSize: NSSize(width: 760, height: 540),
+            rootView: SettingsView(model: model)
         )
-        w.titleVisibility = .hidden
-        w.titlebarAppearsTransparent = true
-        w.isReleasedWhenClosed = false
-        w.contentMinSize = NSSize(width: 720, height: 600)
-        w.contentView = NSHostingView(rootView: SettingsView(model: model))
         w.center()
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

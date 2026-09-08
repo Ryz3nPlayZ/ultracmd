@@ -30,11 +30,26 @@ struct ClipEntry: Identifiable, Codable, Equatable {
     /// App the content was copied from (nil on legacy entries).
     var sourceBundleID: String?
     var sourceAppName: String?
+    /// Sidecar file holding the *full* text when it exceeded the inline cap
+    /// (index bloat control — `text` then carries only the truncated copy).
+    var textPath: String?
+    /// Vision-extracted text for image entries (searchable & copyable).
+    var ocrText: String?
     /// New fields are optionals so pre-migration index.json files decode.
     var pinned: Bool?
     var copyCount: Int?
     var firstCopiedAt: Date?
     var lastCopiedAt: Date?
+
+    /// The complete text payload — inline, or read from the sidecar file.
+    var fullText: String? {
+        if let textPath,
+           let stored = try? String(contentsOf: URL(fileURLWithPath: textPath), encoding: .utf8),
+           !stored.isEmpty {
+            return stored
+        }
+        return text
+    }
 
     var isPinned: Bool { pinned ?? false }
     var timesCopied: Int { max(1, copyCount ?? 1) }
@@ -108,6 +123,53 @@ struct ClipEntry: Identifiable, Codable, Equatable {
                 && filePaths == other.filePaths
                 && colorHex == other.colorHex
         }
+    }
+}
+
+/// Compaction policy (pure, unit-tested): the JSON index only carries a
+/// truncated copy of very long texts — the full payload moves to a sidecar
+/// file, exactly like images/RTF always have.
+enum ClipCompactor {
+    /// Texts longer than this live in a sidecar file instead of the index.
+    static let inlineTextLimit = 2048
+    /// Truncated inline preview kept in `text` for search + previews.
+    static let inlinePreviewLimit = 2000
+
+    static func compact(_ text: String, directory: URL) -> (text: String, path: String?) {
+        guard text.count > inlineTextLimit else { return (text, nil) }
+        let url = directory.appendingPathComponent("\(UUID().uuidString).txt")
+        guard (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil else {
+            return (text, nil) // write failed → keep inline rather than lose data
+        }
+        return (String(text.prefix(inlinePreviewLimit)), url.path)
+    }
+
+    /// Time-decay prune: unpinned entries older than the cutoff go first,
+    /// oldest first, until the count fits the capacity. Pinned survive.
+    static func prune(
+        _ entries: [ClipEntry],
+        capacity: Int,
+        retentionDays: Int,
+        now: Date = Date()
+    ) -> [ClipEntry] {
+        var survivors = entries
+        if retentionDays > 0,
+           let horizon = Calendar.current.date(byAdding: .day, value: -retentionDays, to: now) {
+            survivors = survivors.filter { $0.isPinned || $0.lastCopied > horizon }
+        }
+        var unpinned = survivors.filter { !$0.isPinned }.count
+        guard unpinned > capacity else { return survivors }
+        // Entries are newest-first; drop from the tail.
+        var result: [ClipEntry] = []
+        result.reserveCapacity(survivors.count)
+        for entry in survivors.reversed() {
+            if unpinned <= capacity || entry.isPinned {
+                result.append(entry)
+            } else {
+                unpinned -= 1
+            }
+        }
+        return result.reversed()
     }
 }
 
@@ -410,10 +472,13 @@ final class ClipboardHistoryManager: ObservableObject {
             } else {
                 kind = .text
             }
+            // Very long texts move to a sidecar file so index.json stays lean.
+            let (inline, textPath) = ClipCompactor.compact(trimmed, directory: storeDir)
             entry = ClipEntry(
                 id: UUID(), kind: kind, createdAt: Date(),
-                text: trimmed, colorHex: colorHex,
+                text: inline, colorHex: colorHex,
                 sourceBundleID: sourceBundleID, sourceAppName: sourceAppName,
+                textPath: textPath,
                 firstCopiedAt: Date(), lastCopiedAt: Date()
             )
         } else {
@@ -422,6 +487,21 @@ final class ClipboardHistoryManager: ObservableObject {
 
         guard let entry else { return }
         insert(entry)
+        if entry.kind == .image { enrichWithOCR(entry) }
+    }
+
+    /// Background Vision text extraction for a freshly captured image.
+    private func enrichWithOCR(_ entry: ClipEntry) {
+        guard SettingsStore.shared.clipboardOCRText, let path = entry.imagePath else { return }
+        let id = entry.id
+        Task { [weak self] in
+            guard let text = await ClipboardOCR.recognizeText(atPath: path) else { return }
+            await MainActor.run { [weak self] in
+                guard let self, let index = self.entries.firstIndex(where: { $0.id == id }) else { return }
+                self.entries[index].ocrText = text
+                self.persist()
+            }
+        }
     }
 
     private func insert(_ entry: ClipEntry) {
@@ -437,27 +517,28 @@ final class ClipboardHistoryManager: ObservableObject {
             return
         }
         entries.insert(entry, at: 0)
-        trim(to: SettingsStore.shared.clipboardCapacity)
+        applyRetention()
         persist()
     }
 
-    /// Pinned entries bypass expiration; only unpinned ones are trimmed.
-    private func trim(to capacity: Int) {
-        var unpinned = entries.filter { !$0.isPinned }.count
-        guard unpinned > capacity else { return }
-        var keep: [ClipEntry] = []
-        keep.reserveCapacity(entries.count)
-        for entry in entries.reversed() {
-            if unpinned <= capacity {
-                keep.append(entry)
-            } else if entry.isPinned {
-                keep.append(entry)
-            } else {
-                unpinned -= 1
-                removePayloads(for: [entry])
-            }
-        }
-        entries = keep.reversed()
+    /// Capacity + time-decay pruning in one pass (pinned entries survive).
+    private func applyRetention() {
+        let kept = ClipCompactor.prune(
+            entries,
+            capacity: SettingsStore.shared.clipboardCapacity,
+            retentionDays: SettingsStore.shared.clipboardRetentionDays
+        )
+        guard kept.count != entries.count else { return }
+        let keptIDs = Set(kept.map(\.id))
+        let doomed = entries.filter { !keptIDs.contains($0.id) }
+        // Sidecar payloads shared with a survivor (re-copies dedup to one
+        // path) must not be deleted along with the dropped entry.
+        let survivingTextPaths = Set(kept.compactMap(\.textPath))
+        removePayloads(for: doomed.filter { entry in
+            guard let path = entry.textPath else { return true }
+            return !survivingTextPaths.contains(path)
+        })
+        entries = kept
     }
 
     // MARK: Read path
@@ -491,7 +572,7 @@ final class ClipboardHistoryManager: ObservableObject {
                 pb.setString(text, forType: .string)
             }
         case .color, .text:
-            pb.setString(entry.text ?? entry.colorHex ?? "", forType: .string)
+            pb.setString(entry.fullText ?? entry.colorHex ?? "", forType: .string)
         }
     }
 
@@ -501,7 +582,7 @@ final class ClipboardHistoryManager: ObservableObject {
         suppressNextCapture = true
         lastChangeCount += 1
         pb.clearContents()
-        pb.setString(entry.text ?? entry.preview, forType: .string)
+        pb.setString(entry.fullText ?? entry.preview, forType: .string)
     }
 
     // MARK: Entry management
@@ -518,6 +599,25 @@ final class ClipboardHistoryManager: ObservableObject {
         persist()
     }
 
+    /// Bulk delete matching entries (⌘K "delete older than…"). Returns how
+    /// many were removed so the caller can toast it.
+    @discardableResult
+    func delete(where predicate: (ClipEntry) -> Bool) -> Int {
+        let doomed = entries.filter(predicate)
+        guard !doomed.isEmpty else { return 0 }
+        removePayloads(for: doomed)
+        let doomedIDs = Set(doomed.map(\.id))
+        entries.removeAll { doomedIDs.contains($0.id) }
+        persist()
+        return doomed.count
+    }
+
+    /// Delete unpinned entries older than the given date.
+    @discardableResult
+    func deleteOlder(than cutoff: Date) -> Int {
+        delete(where: { !$0.isPinned && $0.lastCopied < cutoff })
+    }
+
     func clearAll(keepingPinned: Bool) {
         if keepingPinned {
             let doomed = entries.filter { !$0.isPinned }
@@ -531,7 +631,8 @@ final class ClipboardHistoryManager: ObservableObject {
     }
 
     /// Fuzzy search over history, honoring the type filter. Matching also
-    /// covers the source app name ("copied from Xcode").
+    /// covers the source app name ("copied from Xcode") and OCR text on
+    /// image entries.
     func search(_ query: String, filter: ClipFilter = .all, limit: Int = 200) -> [ClipEntry] {
         let pool = entries.filter { filter.matches($0) }
         let trimmed = query.trimmingCharacters(in: .whitespaces)
@@ -545,6 +646,10 @@ final class ClipboardHistoryManager: ObservableObject {
             if let source = entry.sourceAppName?.lowercased(),
                let m = FuzzySearch.match(queryLower: queryLower, textLower: source) {
                 best = max(best ?? -Double.infinity, m.score * 0.6)
+            }
+            if let ocr = entry.ocrText?.lowercased(), ocr.count <= 10_000,
+               let m = FuzzySearch.match(queryLower: queryLower, textLower: String(ocr.prefix(2_000))) {
+                best = max(best ?? -Double.infinity, m.score * 0.5)
             }
             guard var score = best else { return nil }
             if entry.isPinned { score += 8 }
@@ -566,17 +671,22 @@ final class ClipboardHistoryManager: ObservableObject {
     }
 
     private func loadPersisted() {
-        loading = true
-        defer { loading = false }
         guard let data = try? Data(contentsOf: indexURL),
               let decoded = try? JSONDecoder().decode([ClipEntry].self, from: data) else { return }
         entries = decoded
+        // Honor a lowered retention/capacity setting at launch, not just on
+        // the next capture.
+        loading = true
+        applyRetention()
+        loading = false
+        if entries.count != decoded.count { persist() }
     }
 
     private func removePayloads(for clips: [ClipEntry]) {
         for clip in clips {
             if let p = clip.imagePath { try? FileManager.default.removeItem(atPath: p) }
             if let p = clip.rtfPath { try? FileManager.default.removeItem(atPath: p) }
+            if let p = clip.textPath { try? FileManager.default.removeItem(atPath: p) }
         }
     }
 }

@@ -4,10 +4,16 @@ import Foundation
 /// Scans application locations and preference panes to build the root index.
 /// Uses FileManager directory enumeration (fast; avoids NSWorkspace's heavier
 /// APIs) and pulls display names from bundle metadata.
+///
+/// Thread model: `rebuild()` may run on any queue while the main actor (or
+/// the search queue) reads `items` — storage is guarded by a lock and swaps
+/// atomically. Items are handed out with their fuzzy caches pre-warmed so
+/// per-keystroke ranking never lowercases the corpus.
 final class AppIndexer {
-    private(set) var items: [SearchItem] = []
+    private var storage: [SearchItem] = []
+    private let lock = NSLock()
 
-    private static let appDirectories: [String] = [
+    static let appDirectories: [String] = [
         "/Applications",
         "/System/Applications",
         "/System/Applications/Utilities",
@@ -17,11 +23,17 @@ final class AppIndexer {
         "/System/Library/Utilities",
     ]
 
-    private static let paneDirectories: [String] = [
+    static let paneDirectories: [String] = [
         "/System/Library/PreferencePanes",
         "/Library/PreferencePanes",
         "\(NSHomeDirectory())/Library/PreferencePanes",
     ]
+
+    /// Copy-on-write snapshot — cheap for callers, safe across queues.
+    var items: [SearchItem] {
+        lock.lock(); defer { lock.unlock() }
+        return storage
+    }
 
     func rebuild() {
         var found: [SearchItem] = []
@@ -29,12 +41,16 @@ final class AppIndexer {
         found.append(contentsOf: scanDirectories(Self.paneDirectories, extension: "prefPane", kind: .preferencePane))
         // Dedup by bundle identifier.
         var seen = Set<String>()
-        items = found.filter { item in
+        var unique = found.filter { item in
             let key = item.bundleIdentifier ?? item.path ?? item.id
             if seen.contains(key) { return false }
             seen.insert(key)
             return true
         }
+        for i in unique.indices { unique[i].warmFuzzyCache() }
+        lock.lock()
+        storage = unique
+        lock.unlock()
     }
 
     private func scanDirectories(_ dirs: [String], extension ext: String, kind: SearchItemKind) -> [SearchItem] {
@@ -94,7 +110,7 @@ final class AppIndexer {
         ("General", "x-apple.systempreferences:com.apple.systempreferences", "gearshape"),
         ("About", "x-apple.systempreferences:com.apple.SystemProfiler.AboutExtension", "info.circle"),
         ("Software Update", "x-apple.systempreferences:com.apple.Software-Update-Settings.extension", "arrow.triangle.2.circlepath"),
-        ("Storage", "x-apple.systempreferences:com.apple.SystemProfiler.AboutExtension", "externaldrive"),
+        ("Storage", "x-apple.systempreferences:com.apple.Storage-Settings.extension", "externaldrive"),
         ("Wallpaper", "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension", "photo"),
         ("Login Items", "x-apple.systempreferences:com.apple.Login_Items-Settings.extension", "rectangle.badge.checkmark"),
         ("Sharing", "x-apple.systempreferences:com.apple.Sharing-Settings.extension", "square.and.arrow.up"),
@@ -124,7 +140,12 @@ final class AppIndexer {
                 subtitle: "System Settings",
                 kind: .preferencePane,
                 icon: .symbol(pane.icon),
-                keywords: ["settings", "preferences", "system", pane.title],
+                // No generic "system" keyword: it made all 33 panes exact-match
+                // the partial query "system" and bury the System Settings app
+                // itself. Ranking additionally demotes keywords/subtitles
+                // shared across many items (IDF), so the app's own title
+                // match always wins for "system" / "system settings".
+                keywords: ["settings", "preferences", pane.title],
                 url: pane.url
             )
         }

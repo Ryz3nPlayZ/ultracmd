@@ -33,6 +33,16 @@ final class SettingsStore: ObservableObject {
         static let originY = "launcherOriginY"
         static let clipIgnoreSecure = "clipboardIgnoreSecureApps"
         static let clipExcludedApps = "clipboardExcludedApps"
+        static let clipRetentionDays = "clipboardRetentionDays"
+        static let clipOCR = "clipboardOCRText"
+        static let pasteQueueHotkey = "pasteQueueHotkeyEnabled"
+        static let favorites = "favoriteItemIDs"
+        static let searchSensitivity = "searchSensitivityIndex"
+        static let fallbackAI = "fallbackAIEnabled"
+        static let fallbackWeb = "fallbackWebEnabled"
+        static let webEngine = "webSearchEngineIndex"
+        static let compactLauncher = "compactLauncherWindow"
+        static let emojiInline = "emojiInlineInRoot"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -94,6 +104,26 @@ final class SettingsStore: ObservableObject {
             .filter { !$0.isEmpty })
     }
 
+    /// Unpinned entries older than this are pruned (0 = keep until capacity).
+    var clipboardRetentionDays: Int {
+        get { max(0, min(365, d.object(forKey: Key.clipRetentionDays) as? Int ?? 90)) }
+        set { d.set(newValue, forKey: Key.clipRetentionDays) }
+    }
+
+    /// Run Vision text recognition on captured images so their text is
+    /// searchable and copyable.
+    var clipboardOCRText: Bool {
+        get { d.object(forKey: Key.clipOCR) as? Bool ?? true }
+        set { d.set(newValue, forKey: Key.clipOCR) }
+    }
+
+    /// Register the global ⌘⇧V "paste next from queue" hotkey (opt-in — the
+    /// system-wide chord would otherwise shadow Paste and Match Style).
+    var pasteQueueHotkeyEnabled: Bool {
+        get { d.object(forKey: Key.pasteQueueHotkey) as? Bool ?? false }
+        set { d.set(newValue, forKey: Key.pasteQueueHotkey) }
+    }
+
     // MARK: Search
 
     var fileSearchEnabled: Bool {
@@ -117,6 +147,56 @@ final class SettingsStore: ObservableObject {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
             .map { ($0 as NSString).expandingTildeInPath }
+    }
+
+    // MARK: Search behavior
+
+    /// 0 = loose (every subsequence match), 1 = normal, 2 = strict (only
+    /// confident matches survive — junk rows disappear).
+    var searchSensitivityIndex: Int {
+        get { min(max(d.object(forKey: Key.searchSensitivity) as? Int ?? 1, 0), 2) }
+        set {
+            d.set(newValue, forKey: Key.searchSensitivity)
+            objectWillChange.send()
+        }
+    }
+
+    /// Minimum fuzzy match score that survives ranking for the current
+    /// sensitivity. Weak subsequence matches score below zero; prefix and
+    /// exact matches score well above it.
+    var searchMinMatchScore: Double {
+        switch searchSensitivityIndex {
+        case 0: return -1_000_000
+        case 2: return 12
+        default: return -14
+        }
+    }
+
+    /// Offer "Ask AI" when nothing matched.
+    var fallbackAIEnabled: Bool {
+        get { d.object(forKey: Key.fallbackAI) as? Bool ?? true }
+        set { d.set(newValue, forKey: Key.fallbackAI) }
+    }
+
+    /// Offer "Search the Web" when nothing matched.
+    var fallbackWebEnabled: Bool {
+        get { d.object(forKey: Key.fallbackWeb) as? Bool ?? true }
+        set { d.set(newValue, forKey: Key.fallbackWeb) }
+    }
+
+    /// 0 = Google, 1 = DuckDuckGo, 2 = Bing.
+    var webSearchEngineIndex: Int {
+        get { min(max(d.object(forKey: Key.webEngine) as? Int ?? 0, 0), 2) }
+        set {
+            d.set(newValue, forKey: Key.webEngine)
+            objectWillChange.send()
+        }
+    }
+
+    /// Emoji answer rows directly in root search (in addition to the picker).
+    var emojiInlineInRoot: Bool {
+        get { d.object(forKey: Key.emojiInline) as? Bool ?? true }
+        set { d.set(newValue, forKey: Key.emojiInline) }
     }
 
     // MARK: AI
@@ -210,6 +290,41 @@ final class SettingsStore: ObservableObject {
         return hiddenBundleIDs.contains(bundleID)
     }
 
+    // MARK: Favorites
+
+    /// Search-item ids pinned to the top of the empty-query view (⌘F).
+    /// Stored comma-separated in insertion order.
+    var favoriteItemIDs: [String] {
+        get {
+            (d.string(forKey: Key.favorites) ?? "")
+                .split(separator: "\u{1F}")
+                .map(String.init)
+                .filter { !$0.isEmpty }
+        }
+        set {
+            d.set(newValue.joined(separator: "\u{1F}"), forKey: Key.favorites)
+            objectWillChange.send()
+        }
+    }
+
+    func isFavorite(_ id: String) -> Bool {
+        favoriteItemIDs.contains(id)
+    }
+
+    /// Pin or unpin; new favorites append (manual order, Raycast-style).
+    @discardableResult
+    func toggleFavorite(_ id: String) -> Bool {
+        var favorites = favoriteItemIDs
+        if let index = favorites.firstIndex(of: id) {
+            favorites.remove(at: index)
+            favoriteItemIDs = favorites
+            return false
+        }
+        favorites.append(id)
+        favoriteItemIDs = favorites
+        return true
+    }
+
     // MARK: Permissions bookkeeping
 
     /// True once we have ever shown the accessibility request — we never
@@ -244,6 +359,13 @@ final class SettingsStore: ObservableObject {
     /// Launcher window width preset: 0 compact (~640pt), 1 expanded (~760pt).
     @Published var launcherSizeMode: Int = 1 {
         didSet { d.set(launcherSizeMode, forKey: Key.launcherSizeMode) }
+    }
+
+    /// Collapse the launcher to a short window while the query is empty;
+    /// typing expands it to the full height (Raycast's compact preset).
+    var compactLauncherWindow: Bool {
+        get { d.object(forKey: Key.compactLauncher) as? Bool ?? true }
+        set { d.set(newValue, forKey: Key.compactLauncher) }
     }
 
     // MARK: AI surface model overrides ("" = follow the provider default)

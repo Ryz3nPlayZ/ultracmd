@@ -58,7 +58,7 @@ struct ExtensionView: View {
             }
 
             Text("⌘K actions · esc back")
-                .font(.system(size: 10.5))
+                .font(.system(size: 10))
                 .foregroundStyle(.white.opacity(0.32))
         }
         .padding(.horizontal, Theme.outerPadding)
@@ -97,9 +97,11 @@ struct ExtensionView: View {
                     ForEach(Array(descriptor.sections ?? []), id: \.self) { section in
                         self.sectionView(section)
                     }
+                    // Clearance so the last rows clear the footer pills.
+                    Color.clear.frame(height: Theme.rowHeight + 26)
                 }
                 .padding(.horizontal, Theme.outerPadding)
-                .padding(.vertical, 6)
+                .padding(.top, 4)
             }
             .noScrollIndicators()
             .onChange(of: model.extSelectedIndex) { newIndex in
@@ -112,10 +114,11 @@ struct ExtensionView: View {
     private func sectionView(_ section: ExtSection) -> some View {
         if let title = section.title, !title.isEmpty {
             Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: Theme.sectionHeaderSize, weight: .semibold))
+                .tracking(0.6)
                 .foregroundStyle(.white.opacity(0.35))
                 .padding(.horizontal, 10)
-                .padding(.top, 8)
+                .padding(.top, 7)
                 .padding(.bottom, 2)
         }
         ForEach(Array(section.items.enumerated()), id: \.element.stableID) { globalIndex, item in
@@ -162,6 +165,7 @@ struct ExtensionView: View {
         ScrollView {
             MarkdownText(markdown: descriptor.markdown ?? "")
                 .padding(Theme.outerPadding + 2)
+                .padding(.bottom, Theme.rowHeight + 26)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .noScrollIndicators()
@@ -194,6 +198,7 @@ struct ExtensionView: View {
                 }
             }
             .padding(Theme.outerPadding + 2)
+            .padding(.bottom, Theme.rowHeight + 26)
         }
         .noScrollIndicators()
     }
@@ -216,13 +221,13 @@ struct ExtItemRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: IconMapper.symbol(for: item.icon))
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(.primary)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.white.opacity(0.7))
                 .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.title ?? "")
-                    .font(.system(size: 13.5, weight: .medium))
+                    .font(.system(size: Theme.rowTitleSize, weight: .medium))
                     .lineLimit(1)
                 if let subtitle = item.subtitle, !subtitle.isEmpty {
                     Text(subtitle)
@@ -255,7 +260,7 @@ struct ExtItemRow: View {
             }
         }
         .padding(.horizontal, 10)
-        .frame(minHeight: 40)
+        .frame(height: Theme.rowHeight)
         .background(
             RoundedRectangle(cornerRadius: Theme.itemRadius, style: .continuous)
                 .fill(rowFill)

@@ -1,11 +1,13 @@
 import SwiftUI
 
-/// Clipboard history, Raycast-style (issue #4): a dual-pane surface —
-/// left, the chronological list grouped into Pinned / Today / Yesterday /
-/// Past 7 Days / Past 30 Days; right, an inspector with a live preview and
-/// full metadata (source app, type, dimensions, copy frequency, timestamps).
-/// The shared search bar filters (fuzzy, source-app aware); the type filter
-/// chip (⌘P) narrows by kind; the footer pill pastes into the frontmost app.
+/// Clipboard history, Raycast-style (issue #4): a compact left sidebar with
+/// the chronological list (Pinned / Today / Yesterday / Past 7 / Past 30
+/// Days) and a wide right detail panel that leads with the entry's actual
+/// content — full-width image, scrollable text, color swatch or file list —
+/// with source/type/dimensions metadata below. The shared search bar filters
+/// (fuzzy, source-app aware); the type filter chip (⌘p) narrows by kind;
+/// ⏎ pastes into the frontmost app (Accessibility-gated, surfaced in the
+/// footer).
 struct ClipboardView: View {
     @ObservedObject var model: AppModel
     /// Top padding inside the scroll content (clears the floating header).
@@ -14,20 +16,26 @@ struct ClipboardView: View {
     @State private var visibleIDs: Set<UUID> = []
     @State private var lastSelectedIndex = 0
 
-    private let detailWidth: CGFloat = 252
+    /// Narrow navigation sidebar on the left; the selected entry's content
+    /// owns the wide right pane (the pre-redesign layout had this inverted).
+    private let sidebarWidth: CGFloat = 230
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             listPane
-                .frame(maxWidth: .infinity)
+                .frame(width: sidebarWidth)
             Rectangle()
                 .fill(Color.white.opacity(0.08))
                 .frame(width: 0.5)
                 .padding(.vertical, 14)
-            ClipDetailView(entry: model.selectedClipEntry, pasteTarget: model.pasteTargetName)
-                .frame(width: detailWidth)
-                .padding(.top, contentTopPadding - 6)
-                .padding(.bottom, 58)
+            ClipDetailView(
+                entry: model.selectedClipEntry,
+                pasteTarget: model.pasteTargetName,
+                pasteTrusted: model.pasteAccessibilityTrusted
+            )
+            .frame(maxWidth: .infinity)
+            .padding(.top, contentTopPadding - 6)
+            .padding(.bottom, 58)
         }
         .onAppear {
             model.refreshClipboard()
@@ -83,7 +91,8 @@ struct ClipboardView: View {
                             ForEach(section.rows, id: \.entry.id) { row in
                                 ClipRow(
                                     entry: row.entry,
-                                    selected: row.index == model.clipboardSelectedIndex
+                                    selected: row.index == model.clipboardSelectedIndex,
+                                    compact: true
                                 )
                                 .id(row.entry.id)
                                 .onAppear { visibleIDs.insert(row.entry.id) }
@@ -96,7 +105,7 @@ struct ClipboardView: View {
                         // Clearance so the last rows clear the bottom fade.
                         Color.clear.frame(height: Theme.rowHeight + 26)
                     }
-                    .padding(.horizontal, Theme.outerPadding)
+                    .padding(.horizontal, 8)
                     .padding(.bottom, 8)
                 }
                 .noScrollIndicators()
@@ -123,10 +132,10 @@ struct ClipboardView: View {
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title.uppercased())
-            .font(.system(size: 10.5, weight: .semibold))
+            .font(.system(size: 9.5, weight: .semibold))
             .tracking(0.6)
             .foregroundStyle(.white.opacity(0.35))
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 8)
             .padding(.top, 8)
             .padding(.bottom, 2)
     }
@@ -139,6 +148,8 @@ struct ClipboardView: View {
             Text(model.query.isEmpty ? "Clipboard history is empty" : "Nothing matches “\(model.query)”")
                 .font(.system(size: 13))
                 .foregroundStyle(.white.opacity(0.4))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.top, contentTopPadding)
@@ -148,45 +159,49 @@ struct ClipboardView: View {
 // MARK: - Row
 
 /// One history row: type badge icon, single-line preview, sub-line with
-/// kind · relative time · copy count, pin glyph for pinned entries.
+/// kind · relative time · copy count, pin glyph for pinned entries. The
+/// sidebar variant drops the sub-line to keep the narrow column dense.
 /// Click selects (⏎ pastes — keyboard-centric by design).
 struct ClipRow: View {
     let entry: ClipEntry
     let selected: Bool
+    var compact: Bool = false
     @State private var hovered = false
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             leadingIcon
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.preview.isEmpty ? "(empty)" : entry.preview)
-                    .font(.system(size: 13, weight: .regular))
+                    .font(.system(size: compact ? 12 : 13, weight: .regular))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                HStack(spacing: 6) {
-                    Text(entry.typeLabel.uppercased())
-                    Text("·")
-                    Text(entry.lastCopied.relativeLabel)
-                    if entry.timesCopied > 1 {
+                if !compact {
+                    HStack(spacing: 6) {
+                        Text(entry.typeLabel.uppercased())
                         Text("·")
-                        Text("×\(entry.timesCopied)")
+                        Text(entry.lastCopied.relativeLabel)
+                        if entry.timesCopied > 1 {
+                            Text("·")
+                            Text("×\(entry.timesCopied)")
+                        }
                     }
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.35))
                 }
-                .font(.system(size: 10))
-                .foregroundStyle(.white.opacity(0.35))
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: 6)
 
             if entry.isPinned {
                 Image(systemName: "pin.fill")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 8.5, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.45))
             }
         }
-        .padding(.horizontal, 10)
-        .frame(minHeight: Theme.rowHeight)
+        .padding(.horizontal, compact ? 8 : 10)
+        .frame(height: Theme.rowHeight)
         .background(
             RoundedRectangle(cornerRadius: Theme.itemRadius, style: .continuous)
                 .fill(rowFill)
@@ -209,19 +224,19 @@ struct ClipRow: View {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 28, height: 28)
                     .clipShape(RoundedRectangle(cornerRadius: 5))
-                    .frame(width: 26, height: 26)
+                    .frame(width: 24, height: 24)
             } else {
                 symbolIcon("photo")
             }
         case .color:
             if let color = entry.colorHex.map({ Color(hex: $0) ?? .white }) {
-                RoundedRectangle(cornerRadius: 5)
+                RoundedRectangle(cornerRadius: 4)
                     .fill(color)
-                    .frame(width: 18, height: 18)
-                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.white.opacity(0.25), lineWidth: 0.5))
-                    .frame(width: 26, height: 26)
+                    .frame(width: 16, height: 16)
+                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.white.opacity(0.25), lineWidth: 0.5))
+                    .frame(width: 24, height: 24)
             } else {
                 symbolIcon("paintpalette")
             }
@@ -238,29 +253,34 @@ struct ClipRow: View {
 
     private func symbolIcon(_ name: String) -> some View {
         Image(systemName: name)
-            .font(.system(size: 16))
+            .font(.system(size: compact ? 14 : 16))
             .foregroundStyle(.white.opacity(0.7))
-            .frame(width: 26, height: 26)
+            .frame(width: 24, height: 24)
     }
 }
 
-// MARK: - Inspector pane
+// MARK: - Detail pane
 
-/// Right-hand metadata pane for the selected entry.
+/// Wide right-hand panel for the selected entry: the content itself first
+/// (image, text, color, files), metadata below, keyboard hints last.
 struct ClipDetailView: View {
     let entry: ClipEntry?
     let pasteTarget: String?
+    var pasteTrusted: Bool = true
 
     var body: some View {
         Group {
             if let entry {
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 14) {
                         previewCard(entry)
+                        if let ocr = entry.ocrText, !ocr.isEmpty {
+                            recognizedTextCard(ocr)
+                        }
                         metadata(entry)
                         hint
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 14)
                 }
                 .noScrollIndicators()
             } else {
@@ -286,69 +306,72 @@ struct ClipDetailView: View {
                     Image(nsImage: image)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(maxHeight: 148)
+                        .frame(maxHeight: 260)
+                        .frame(maxWidth: .infinity)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .padding(8)
+                        .padding(10)
                 } else {
                     fallbackPreview("photo", "Image")
                 }
             case .color:
                 if let hex = entry.colorHex, let color = Color(hex: hex) {
-                    VStack(spacing: 8) {
+                    VStack(spacing: 10) {
                         RoundedRectangle(cornerRadius: 8)
                             .fill(color)
-                            .frame(height: 92)
+                            .frame(height: 120)
                         Text(hex.uppercased())
-                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                            .font(.system(size: 15, weight: .semibold, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.85))
+                            .textSelection(.enabled)
                     }
-                    .padding(8)
+                    .padding(10)
                 } else {
                     fallbackPreview("paintpalette", "Color")
                 }
             case .file:
-                VStack(alignment: .leading, spacing: 5) {
-                    ForEach(Array((entry.filePaths ?? []).prefix(6).enumerated()), id: \.offset) { _, path in
-                        HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array((entry.filePaths ?? []).prefix(8).enumerated()), id: \.offset) { _, path in
+                        HStack(spacing: 7) {
                             Image(systemName: "doc")
                                 .font(.system(size: 11))
                                 .foregroundStyle(.white.opacity(0.5))
                             Text((path as NSString).lastPathComponent)
-                                .font(.system(size: 11))
+                                .font(.system(size: 12))
                                 .foregroundStyle(.white.opacity(0.8))
                                 .lineLimit(1)
                                 .truncationMode(.middle)
+                            Spacer(minLength: 0)
                         }
                     }
-                    if (entry.filePaths ?? []).count > 6 {
-                        Text("+ \((entry.filePaths ?? []).count - 6) more…")
+                    if (entry.filePaths ?? []).count > 8 {
+                        Text("+ \((entry.filePaths ?? []).count - 8) more…")
                             .font(.system(size: 11))
                             .foregroundStyle(.white.opacity(0.4))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
+                .padding(12)
             case .url:
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
                     Image(systemName: "link")
                         .font(.system(size: 16))
                         .foregroundStyle(.white.opacity(0.55))
                     Text(entry.text ?? entry.preview)
-                        .font(.system(size: 11.5))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(.white.opacity(0.85))
-                        .lineLimit(4)
+                        .lineLimit(6)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
+                .padding(12)
             case .rtf, .text:
-                Text(entry.text ?? entry.preview)
-                    .font(.system(size: 11.5))
+                Text(entry.fullText ?? entry.preview)
+                    .font(.system(size: 12.5))
                     .foregroundStyle(.white.opacity(0.85))
-                    .lineLimit(10)
+                    .lineLimit(28)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
+                    .padding(12)
                     .textSelection(.enabled)
             }
         }
@@ -370,6 +393,34 @@ struct ClipDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 26)
+    }
+
+    /// Vision-extracted text under an image — what the ⌘K "Copy Recognized
+    /// Text" action copies, and what image search matches against.
+    private func recognizedTextCard(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "doc.text.viewfinder")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.45))
+                Text("RECOGNIZED TEXT")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.8))
+                .lineLimit(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
     }
 
     private func metadata(_ entry: ClipEntry) -> some View {
@@ -399,7 +450,7 @@ struct ClipDetailView: View {
                 }
             }
             if entry.kind == .text || entry.kind == .rtf || entry.kind == .url {
-                if let text = entry.text, !text.isEmpty {
+                if let text = entry.fullText ?? entry.text, !text.isEmpty {
                     let lines = text.components(separatedBy: .newlines).count
                     let words = text.split(whereSeparator: \.isWhitespace).count
                     metaRow("Characters") { Text("\(text.count)") }
@@ -436,12 +487,20 @@ struct ClipDetailView: View {
         }
     }
 
+    /// Hints match what ⏎ actually does — without the Accessibility grant
+    /// Enter copies and the fix is one System Settings toggle away.
     private var hint: some View {
-        Text("⏎ Paste to \(pasteTarget ?? "Active App") · ⌘K Actions")
-            .font(.system(size: 10.5))
-            .foregroundStyle(.white.opacity(0.32))
-            .frame(maxWidth: .infinity)
-            .padding(.top, 2)
+        Group {
+            if pasteTrusted {
+                Text("⏎ Paste to \(pasteTarget ?? "Active App") · ⌥↵ Plain Text · ⌘K Actions")
+            } else {
+                Text("⏎ Copies · Grant Accessibility in ⌘K to paste automatically")
+            }
+        }
+        .font(.system(size: 10.5))
+        .foregroundStyle(.white.opacity(0.32))
+        .frame(maxWidth: .infinity)
+        .padding(.top, 2)
     }
 }
 

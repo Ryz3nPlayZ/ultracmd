@@ -3,33 +3,73 @@ import Foundation
 
 // Virtual-key codes from Carbon's Events.h (not auto-imported into Swift).
 private let kUCVK_ANSI_Space: UInt32 = 0x31
+private let kUCVK_ANSI_V: UInt32 = 0x09
 private let kUCVK_F8: UInt32 = 0x68
 
 /// Global hotkey registration via Carbon's RegisterEventHotKey.
 /// This is the mechanism native launchers (Raycast, sol) use for reliable
 /// system-wide key handling without input-monitoring permissions.
+///
+/// Two slots: the launcher summon hotkey (id 1) and an optional secondary
+/// chord (id 2 — the opt-in ⇧⌘V "paste next from queue").
 final class HotkeyCenter {
-    private var hotKeyRef: EventHotKeyRef?
+    private final class Slot {
+        var hotKeyRef: EventHotKeyRef?
+        var keyCode: UInt32 = 0
+        var modifiers: UInt32 = 0
+        var handler: (() -> Void)?
+    }
+
+    private let primary = Slot()
+    private let secondary = Slot()
     private var eventHandler: EventHandlerRef?
-    private var registeredKey: UInt32 = 0
-    private var registeredModifiers: UInt32 = 0
-    private var handler: (() -> Void)?
-    private static let hotkeyID = EventHotKeyID(signature: 0x554C_5443, id: 1) // 'ULTC'
+    private static let signature: OSType = 0x554C_5443 // 'ULTC'
 
     deinit {
         unregister()
     }
 
     func register(keyCode: UInt32, modifiers: UInt32, onTrigger: @escaping () -> Void) {
-        guard keyCode != registeredKey || modifiers != registeredModifiers else {
-            handler = onTrigger
+        configure(primary, id: 1, keyCode: keyCode, modifiers: modifiers, onTrigger: onTrigger)
+    }
+
+    func registerSecondary(keyCode: UInt32, modifiers: UInt32, onTrigger: @escaping () -> Void) {
+        configure(secondary, id: 2, keyCode: keyCode, modifiers: modifiers, onTrigger: onTrigger)
+    }
+
+    func unregisterSecondary() {
+        unregisterSlot(secondary)
+    }
+
+    func unregister() {
+        unregisterSlot(primary)
+        unregisterSlot(secondary)
+    }
+
+    private func configure(_ slot: Slot, id: UInt32, keyCode: UInt32, modifiers: UInt32, onTrigger: @escaping () -> Void) {
+        guard keyCode != slot.keyCode || modifiers != slot.modifiers else {
+            slot.handler = onTrigger
             return
         }
-        unregister()
-        handler = onTrigger
-        registeredKey = keyCode
-        registeredModifiers = modifiers
+        unregisterSlot(slot)
+        slot.handler = onTrigger
+        slot.keyCode = keyCode
+        slot.modifiers = modifiers
 
+        installHandlerIfNeeded()
+
+        let hotKeyID = EventHotKeyID(signature: Self.signature, id: id)
+        var ref: EventHotKeyRef?
+        let status = RegisterEventHotKey(keyCode, modifiers, hotKeyID, GetApplicationEventTarget(), 0, &ref)
+        if status == noErr {
+            slot.hotKeyRef = ref
+        } else {
+            NSLog("UltraCMD: failed to register hotkey id \(id) (OSStatus \(status))")
+        }
+    }
+
+    private func installHandlerIfNeeded() {
+        guard eventHandler == nil else { return }
         InstallEventHandler(
             GetApplicationEventTarget(),
             { _, event, userData in
@@ -39,9 +79,10 @@ final class HotkeyCenter {
                     EventParamType(typeEventHotKeyID), nil,
                     MemoryLayout<EventHotKeyID>.size, nil, &hkID
                 )
-                if hkID.signature == HotkeyCenter.hotkeyID.signature {
+                if hkID.signature == HotkeyCenter.signature {
                     let center = Unmanaged<HotkeyCenter>.fromOpaque(userData!).takeUnretainedValue()
-                    if let handler = center.handler {
+                    let handler = hkID.id == 2 ? center.secondary.handler : center.primary.handler
+                    if let handler {
                         DispatchQueue.main.async { handler() }
                     }
                 }
@@ -51,20 +92,13 @@ final class HotkeyCenter {
             Unmanaged.passUnretained(self).toOpaque(),
             &eventHandler
         )
-
-        let status = RegisterEventHotKey(keyCode, modifiers, Self.hotkeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
-        if status != noErr {
-            NSLog("UltraCMD: failed to register hotkey (OSStatus \(status))")
-        }
     }
 
-    func unregister() {
-        if let ref = hotKeyRef { UnregisterEventHotKey(ref) }
-        if let handlerRef = eventHandler { RemoveEventHandler(handlerRef) }
-        hotKeyRef = nil
-        eventHandler = nil
-        registeredKey = 0
-        registeredModifiers = 0
+    private func unregisterSlot(_ slot: Slot) {
+        if let ref = slot.hotKeyRef { UnregisterEventHotKey(ref) }
+        slot.hotKeyRef = nil
+        slot.keyCode = 0
+        slot.modifiers = 0
     }
 }
 
@@ -100,5 +134,12 @@ struct HotkeyCombination: Equatable {
         keyCode: kUCVK_F8,
         carbonModifiers: 0,
         displayName: "F8"
+    )
+
+    /// ⇧⌘V — "paste next from queue" (opt-in in Settings → Clipboard).
+    static let pasteNext = HotkeyCombination(
+        keyCode: kUCVK_ANSI_V,
+        carbonModifiers: UInt32(shiftKey | cmdKey),
+        displayName: "⇧⌘V"
     )
 }

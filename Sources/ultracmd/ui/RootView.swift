@@ -10,7 +10,7 @@ struct RootView: View {
     @ObservedObject var model: AppModel
     @FocusState private var searchFocused: Bool
 
-    private let topBarHeight: CGFloat = 58
+    private var topBarHeight: CGFloat { Theme.searchBarHeight }
     /// Rows are crisp at rest but dissolve over this band when scrolled
     /// under the search bar. Kept tight — the bar should breathe against the
     /// list, not float away from it (issue #1).
@@ -139,7 +139,7 @@ struct RootView: View {
             .opacity(model.mode == .root ? 0.7 : 1)
 
             field
-                .font(.system(size: 21, weight: .regular))
+                .font(.system(size: Theme.searchFontSize, weight: .regular))
                 .textFieldStyle(.plain)
                 .foregroundStyle(.primary)
 
@@ -257,17 +257,15 @@ struct RootView: View {
 
     @ViewBuilder
     private var footerPills: some View {
-        if model.mode != .extensionView {
-            VStack {
-                Spacer()
-                HStack(spacing: 8) {
-                    appMenuPill
-                    Spacer(minLength: 12)
-                    actionSplitPill
-                }
-                .padding(.horizontal, Theme.outerPadding)
-                .padding(.bottom, Theme.outerPadding)
+        VStack {
+            Spacer()
+            HStack(spacing: 8) {
+                appMenuPill
+                Spacer(minLength: 12)
+                actionSplitPill
             }
+            .padding(.horizontal, Theme.outerPadding)
+            .padding(.bottom, Theme.outerPadding)
         }
     }
 
@@ -282,9 +280,9 @@ struct RootView: View {
             }
         } label: {
             Image(systemName: "command")
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.white.opacity(0.78))
-                .frame(width: 46, height: 34)
+                .frame(width: 40, height: Theme.footerPillHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -302,36 +300,36 @@ struct RootView: View {
             } label: {
                 HStack(spacing: 7) {
                     Text(model.primaryFooterLabel)
-                        .font(.system(size: 12.5, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                         .lineLimit(1)
                     Text("↵")
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.5))
                 }
                 .foregroundStyle(.white.opacity(0.88))
-                .padding(.horizontal, 14)
-                .frame(height: 34)
+                .padding(.horizontal, 13)
+                .frame(height: Theme.footerPillHeight)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             Rectangle()
                 .fill(Color.white.opacity(0.14))
-                .frame(width: 0.5, height: 15)
+                .frame(width: 0.5, height: 14)
 
             Button {
                 model.openActionPanel()
             } label: {
                 HStack(spacing: 7) {
                     Text("⌘K")
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.5))
                     Text("Actions")
-                        .font(.system(size: 12.5, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                 }
                 .foregroundStyle(.white.opacity(0.88))
-                .padding(.horizontal, 14)
-                .frame(height: 34)
+                .padding(.horizontal, 13)
+                .frame(height: Theme.footerPillHeight)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -465,27 +463,38 @@ struct RootResultsView: View {
     @State private var visibleIDs: Set<String> = []
     @State private var lastSelectedIndex = 0
 
-    /// Empty query → one mixed "Suggestions" section (kind labels on rows).
-    /// Searching → grouped by kind with section headers, rows drop the
-    /// redundant per-row label.
+    /// Empty query → Favorites section first (⌘F), then one mixed
+    /// "Suggestions" section (kind labels on rows). Searching → grouped by
+    /// kind with section headers, rows drop the redundant per-row label.
     private var sections: [ResultSection] {
         let enumerated = Array(model.results.enumerated())
-        guard !model.query.isEmpty else {
-            return [ResultSection(title: "Suggestions", rows: enumerated.map { (index: $0.offset, result: $0.element) })]
-        }
-        var order: [SearchItemKind] = []
-        var buckets: [SearchItemKind: [(index: Int, result: SearchResult)]] = [:]
-        for pair in enumerated {
-            let kind = pair.element.item.kind
-            if buckets[kind] == nil {
-                order.append(kind)
-                buckets[kind] = []
+        guard model.query.isEmpty else {
+            var order: [SearchItemKind] = []
+            var buckets: [SearchItemKind: [(index: Int, result: SearchResult)]] = [:]
+            for pair in enumerated {
+                let kind = pair.element.item.kind
+                if buckets[kind] == nil {
+                    order.append(kind)
+                    buckets[kind] = []
+                }
+                buckets[kind]?.append((index: pair.offset, result: pair.element))
             }
-            buckets[kind]?.append((index: pair.offset, result: pair.element))
+            return order.compactMap { kind in
+                buckets[kind].map { ResultSection(title: Self.sectionTitle(for: kind), rows: $0) }
+            }
         }
-        return order.compactMap { kind in
-            buckets[kind].map { ResultSection(title: Self.sectionTitle(for: kind), rows: $0) }
+        let favorites = enumerated.compactMap { pair -> (index: Int, result: SearchResult)? in
+            model.isFavorite(pair.element.id) ? (index: pair.offset, result: pair.element) : nil
         }
+        let rest = enumerated.compactMap { pair -> (index: Int, result: SearchResult)? in
+            model.isFavorite(pair.element.id) ? nil : (index: pair.offset, result: pair.element)
+        }
+        var out: [ResultSection] = []
+        if !favorites.isEmpty {
+            out.append(ResultSection(title: "Favorites", rows: favorites))
+        }
+        out.append(ResultSection(title: "Suggestions", rows: rest))
+        return out
     }
 
     private static func sectionTitle(for kind: SearchItemKind) -> String {
@@ -501,6 +510,8 @@ struct RootResultsView: View {
         case .bookmark: return "Web"
         case .systemAction: return "System"
         case .emoji: return "Emoji & Symbols"
+        case .quicklink: return "Quicklinks"
+        case .snippet: return "Snippets"
         }
     }
 
@@ -519,7 +530,8 @@ struct RootResultsView: View {
                                     result: row.result,
                                     index: row.index,
                                     selected: row.index == model.selectedIndex,
-                                    showsKindLabel: model.query.isEmpty
+                                    showsKindLabel: model.query.isEmpty,
+                                    isFavorite: model.query.isEmpty && model.isFavorite(row.result.id)
                                 )
                                 .id(row.result.id)
                                 .onAppear { visibleIDs.insert(row.result.id) }
@@ -562,11 +574,11 @@ struct RootResultsView: View {
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title.uppercased())
-            .font(.system(size: 10.5, weight: .semibold))
+            .font(.system(size: Theme.sectionHeaderSize, weight: .semibold))
             .tracking(0.6)
             .foregroundStyle(.white.opacity(0.35))
             .padding(.horizontal, 10)
-            .padding(.top, 8)
+            .padding(.top, 7)
             .padding(.bottom, 2)
     }
 
@@ -591,6 +603,7 @@ struct ResultRow: View {
     let index: Int
     let selected: Bool
     var showsKindLabel: Bool = false
+    var isFavorite: Bool = false
     @State private var hovered = false
 
     var body: some View {
@@ -610,6 +623,14 @@ struct ResultRow: View {
             }
 
             Spacer(minLength: 8)
+
+            // Pinned by ⌘F — star trails the title so favorites are
+            // recognizable wherever the row appears.
+            if isFavorite {
+                Image(systemName: "star.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
 
             // Kind labels only in the mixed Suggestions section — grouped
             // sections already carry it in their header.
@@ -649,6 +670,8 @@ struct ResultRow: View {
         case .bookmark: return "Web"
         case .systemAction: return "System"
         case .emoji: return "Emoji"
+        case .quicklink: return "Quicklink"
+        case .snippet: return "Snippet"
         }
     }
 }
