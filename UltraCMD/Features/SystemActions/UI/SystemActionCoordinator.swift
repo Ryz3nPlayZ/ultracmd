@@ -81,6 +81,7 @@ final class SystemActionCoordinator {
         case .accessibility: pane = "Privacy_Accessibility"
         case .automation: pane = "Privacy_Automation"
         case .bluetooth: pane = "Privacy_Bluetooth"
+        case .screenRecording: pane = "Privacy_ScreenCapture"
         }
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
             NSWorkspace.shared.open(url)

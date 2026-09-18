@@ -460,6 +460,13 @@ Those routes run only on explicit activation. Automation, Accessibility or Bluet
 requested at first use, and denial produces an alert linking to the relevant System Settings pane.
 Toggle System Appearance changes macOS; UltraCMD follows it only while its own Appearance is System.
 
+The three capture actions — Capture Screenshot (interactive selection), Capture Screenshot to
+Clipboard, and Capture Full Screen (all displays, no shutter) — shell out to `/usr/sbin/screencapture`
+with the palette already hidden, so the crosshair is never offered over UltraCMD's own window. The
+Screen Recording grant bills to the calling app, not the system tool, so `requireScreenRecording()`
+gates all three before the tool runs and a denial names the Screen Recording pane instead of letting
+`screencapture` fail without saying why.
+
 Restart, Shut Down, Log Out, Empty Trash and Quit All Applications confirm before execution: ↵ runs
 the action, Escape cancels. Every dialog is UltraCMD's own: confirmations, failure reports and the Set
 Volume slider all render through `DialogController` rather than an `NSAlert`

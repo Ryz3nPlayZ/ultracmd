@@ -464,6 +464,29 @@ The model switcher is `fixedSize` with its title shortened in `AIChatCoordinator
 middle ellipsis) rather than truncated by layout: a flexible label claimed the row up to its max
 width and clipped the search field well short of the button.
 
+## Screen awareness
+
+`aiScreenAwareness`, off by default and toggled from the chat header or Settings → AI → Chat.
+While it is on, every sent message is preceded by a read of the window the palette was opened
+over — not the palette itself, which is frontmost by the time the composer is up — captured
+through ScreenCaptureKit (`SCContentFilter(desktopIndependentWindow:)`) and OCR'd on device by
+Vision. What reaches the model is `ScreenContext.preamble`: the app, the window title, and the
+condensed text with a cap (`textLimit`, 6 000 characters) and an explicit note that OCR may be
+partial or stale. The block rides as part of the turn's `instructions`, joined to the standing
+instructions by `ScreenContext.combining` — one field per turn, not a message the transcript
+shows, so the conversation reads exactly as it would without it.
+
+A read never blocks or fails a send. No Screen Recording grant, no window to read, or an empty
+OCR pass all mean the message simply goes without the screen; only the missing grant says so, as
+a chat notice naming the permission, and `CGRequestScreenCaptureAccess` is offered from that same
+send so the choice can be made on the spot. The reading happens between Return and the request:
+the user message is appended only once the screen has been read, so the model's answer and the
+screen it was given can never be a turn apart.
+
+`ScreenContext` is pure and covered by `Tests/screen-awareness-test.swift`; capture and OCR live
+in `ScreenReader`, which is deliberately thin — a permission preflight, one window match by pid,
+and a detached Vision pass, with every failure collapsing into "no context".
+
 ## Settings and backup boundary
 
 Settings → AI is a normal grouped `Form` inside UltraCMD's existing Settings window. Its top AI

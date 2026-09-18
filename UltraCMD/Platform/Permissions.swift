@@ -10,6 +10,26 @@ enum Permissions {
         AXIsProcessTrusted()
     }
 
+    /// Screen awareness and `screencapture` both bill this grant to the caller, not the system.
+    static func screenCaptureTrusted() -> Bool {
+        CGPreflightScreenCaptureAccess()
+    }
+
+    /// The system prompt appears only while the choice is undetermined; a denial returns false.
+    @discardableResult
+    static func requestScreenCaptureAccess() -> Bool {
+        CGRequestScreenCaptureAccess()
+    }
+
+    @MainActor
+    static func openScreenCaptureSettings() {
+        guard
+            let url = URL(
+                string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+        else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     /// Returns current trust state and prompts the user to grant it if needed.
     @discardableResult
     static func ensureAccessibility() -> Bool {

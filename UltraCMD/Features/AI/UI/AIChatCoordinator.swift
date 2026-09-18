@@ -10,6 +10,7 @@ final class AIChatCoordinator {
     private let palette: PaletteState
     private let paletteCoordinator: PaletteCoordinator
     private let settingsCoordinator: SettingsCoordinator
+    private let screenReader = ScreenReader()
     private unowned let core: AppCore
 
     init(
@@ -110,19 +111,56 @@ final class AIChatCoordinator {
     @discardableResult
     func send(_ input: String) -> Bool {
         guard settings.aiEnabled else { return false }
+        guard core.aiSettings.screenAwarenessEnabled else { return dispatch(input) }
+        let draft = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !draft.isEmpty || !chat.pendingAttachments.isEmpty, !chat.isStreaming else {
+            return false
+        }
+        // The palette itself is frontmost while the composer is up, so the window that gets read
+        // is the one the palette was opened over.
+        let target = paletteCoordinator.targetApp
+        Task { [weak self] in
+            guard let self else { return }
+            self.dispatch(input, screenPreamble: await self.screenPreamble(for: target))
+        }
+        return true
+    }
+
+    /// The same dispatch every send funnels through, with the screen block riding along when one
+    /// was read. Split out so screen awareness changes when the request is built, never how.
+    @discardableResult
+    private func dispatch(_ input: String, screenPreamble: String? = nil) -> Bool {
         do {
             let webSearch = core.aiSettings.webSearchEnabled && capabilities.webSearch
             let address = MCPComposerAddress.parse(input, slugs: core.mcpCoordinator.slugs)
             return chat.send(
                 address.rest, using: try toolAware(core.aiProvider(), scopedTo: address.slug),
                 webSearch: webSearch,
-                instructions: AIInstructions.compose(
-                    userPrompt: core.aiSettings.systemPrompt,
-                    isEnabled: core.aiSettings.systemPromptEnabled),
+                instructions: ScreenContext.combining(
+                    instructions: AIInstructions.compose(
+                        userPrompt: core.aiSettings.systemPrompt,
+                        isEnabled: core.aiSettings.systemPromptEnabled),
+                    screenPreamble: screenPreamble),
                 contextBudget: contextBudget)
         } catch {
             chat.report(error.localizedDescription)
             return false
+        }
+    }
+
+    /// A failed read never blocks a send: no grant or no window just means no screen context.
+    private func screenPreamble(for app: NSRunningApplication?) async -> String? {
+        switch await screenReader.readFrontmostWindow(of: app) {
+        case .success(let reading):
+            return ScreenContext.preamble(for: reading)
+        case .failure(.denied):
+            Permissions.requestScreenCaptureAccess()
+            chat.report(
+                "Screen awareness needs Screen Recording permission — this message was sent "
+                + "without the screen.")
+            return nil
+        case .failure(.nothingToRead):
+            return nil
         }
     }
 

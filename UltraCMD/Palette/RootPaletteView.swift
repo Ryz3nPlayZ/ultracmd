@@ -667,6 +667,11 @@ struct RootPaletteView: View {
                         isOpen: openMenu == .aiReasoning,
                         action: toggleAIReasoning)
                 }
+                headerGutter(width: metrics.spacing.md)
+                ScreenAwarenessButton(
+                    enabled: core.aiSettings.screenAwarenessEnabled) {
+                        core.aiSettings.screenAwarenessEnabled.toggle()
+                    }
             }
             // The field is the same one in both modes, so dictation serves the query either way.
             if !isCollapsed, vm.mode == .launcher || vm.mode == .ai {

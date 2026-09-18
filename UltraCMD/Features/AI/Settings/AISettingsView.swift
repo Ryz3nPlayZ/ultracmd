@@ -129,6 +129,12 @@ struct AISettingsView: View {
                 Text(
                     "Sends prompts on to a search engine when the route offers one — Codex and OpenRouter.")
             }
+            Toggle(isOn: $settings.screenAwarenessEnabled) {
+                SettingsRowTitle(.aiChat, "Screen awareness")
+                Text(
+                    "While on, every message carries the text OCR reads off the front window, so "
+                    + "answers can lean on what you are looking at.")
+            }
         } header: {
             SettingsSectionHeader(.aiChat)
         } footer: {

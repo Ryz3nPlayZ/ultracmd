@@ -33,6 +33,9 @@ struct SystemAction: Identifiable, Hashable, Sendable {
         case quitAllApps = "quit-all-apps"
         case dismissNotifications = "dismiss-notifications"
         case toggleBluetooth = "toggle-bluetooth"
+        case captureScreenshot = "capture-screenshot"
+        case captureScreenshotToClipboard = "capture-screenshot-to-clipboard"
+        case captureFullScreen = "capture-full-screen"
     }
 
     /// Whether it confirms first, and the copy; every such action is destructive.
@@ -104,6 +107,9 @@ enum SystemActionCatalog {
         case .quitAllApps: return "Quit All Applications"
         case .dismissNotifications: return "Dismiss Notifications"
         case .toggleBluetooth: return "Toggle Bluetooth"
+        case .captureScreenshot: return "Capture Screenshot"
+        case .captureScreenshotToClipboard: return "Capture Screenshot to Clipboard"
+        case .captureFullScreen: return "Capture Full Screen"
         }
     }
 
@@ -137,6 +143,9 @@ enum SystemActionCatalog {
         case .dismissNotifications: return "bell.slash"
         // Not an SF Symbol: the logo is a trademark, so this is a bundled asset.
         case .toggleBluetooth: return "bluetooth"
+        case .captureScreenshot: return "camera.viewfinder"
+        case .captureScreenshotToClipboard: return "camera.on.rectangle"
+        case .captureFullScreen: return "rectangle.on.rectangle"
         }
     }
 

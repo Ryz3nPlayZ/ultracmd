@@ -25,7 +25,11 @@ palette. The original project did the heavy lifting and deserves the credit.
 - Opt-in AI chat: OpenAI, Anthropic, Gemini, OpenRouter, Apple Intelligence, installed
   CLI agents, any OpenAI-compatible endpoint — plus a one-click **Ollama (local)** preset
 - AI quick actions on selected text (fix grammar, rewrite, translate, summarize)
+- **Screen awareness**: opt-in per-chat toggle that OCRs the front window and sends its
+  text as context, so answers can lean on what you're looking at
 - **Dictation**: the palette header's mic button types into the search field and AI chat
+- **Screenshots**: interactive selection, selection-to-clipboard, and full-screen capture
+  as system actions, bindable to hotkeys like the rest
 - Notes, emoji picker, settings backup, Raycast import
 
 ## Requirements

@@ -8,6 +8,7 @@ struct SystemActionFailure: LocalizedError, Sendable {
         case accessibility
         case automation
         case bluetooth
+        case screenRecording
     }
 
     let message: String
@@ -164,8 +165,27 @@ enum SystemActionRunner {
         case .toggleBluetooth:
             let on = try await toggleBluetooth()
             return SystemActionFeedback(on ? "Bluetooth On" : "Bluetooth Off")
+        case .captureScreenshot:
+            try requireScreenRecording()
+            try await runProcess("/usr/sbin/screencapture", arguments: ["-i"])
+        case .captureScreenshotToClipboard:
+            try requireScreenRecording()
+            try await runProcess("/usr/sbin/screencapture", arguments: ["-i", "-c"])
+        case .captureFullScreen:
+            try requireScreenRecording()
+            try await runProcess("/usr/sbin/screencapture", arguments: ["-x"])
         }
         return nil
+    }
+
+    /// `screencapture` bills the Screen Recording grant to the app that spawned it, so the gate
+    /// belongs here where the failure can still name the pane.
+    private static func requireScreenRecording() throws {
+        guard CGPreflightScreenCaptureAccess() else {
+            throw SystemActionFailure(
+                "UltraCMD needs Screen Recording permission to capture the screen.",
+                settings: .screenRecording)
+        }
     }
 
     static func currentVolume() throws -> Float32 {
