@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // F5: build the .app, then debug the binary *inside* the bundle so NSBundle.main
+      // resolves Info.plist (LSUIElement) and resources. Path matches the fixed
+      // -derivedDataPath used by the build task.
+      "type": "swift",
+      "request": "launch",
+      "name": "Run UltraCMD Dev (bundled .app)",
+      "program": "${workspaceFolder}/build/DerivedData/Build/Products/Debug/UltraCMD Dev.app/Contents/MacOS/UltraCMD Dev",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "Build UltraCMD.app (debug)"
+    }
+  ]
+}

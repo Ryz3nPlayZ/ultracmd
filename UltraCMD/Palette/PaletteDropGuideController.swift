@@ -1,0 +1,94 @@
+import AppKit
+import SwiftUI
+
+/// Driven by the window controller: only a live drag has a home placement to point at.
+@MainActor
+final class PaletteDropGuideController {
+    private var panel: NSPanel?
+    private var host: NSHostingView<PaletteDropGuideView>?
+    private var screenFrame: CGRect = .zero
+    private var home: CGPoint = .zero
+    private var width: CGFloat = 0
+    private var armed = false
+
+    /// Reveal the guides, with `home` the default placement's top-left in screen coordinates.
+    func show(home: CGPoint, width: CGFloat, screenFrame: CGRect, armed: Bool) {
+        self.home = home
+        self.width = width
+        self.screenFrame = screenFrame
+        self.armed = armed
+        let panel = ensurePanel()
+        panel.setFrame(screenFrame, display: false)
+        render()
+        panel.orderFrontRegardless()
+    }
+
+    /// Re-point mid-drag. `windowDidMove` fires continuously, so an unchanged move costs nothing.
+    func move(home: CGPoint, screenFrame: CGRect) {
+        guard self.home != home || self.screenFrame != screenFrame else { return }
+        let crossedScreens = self.screenFrame != screenFrame
+        self.home = home
+        self.screenFrame = screenFrame
+        if crossedScreens { panel?.setFrame(screenFrame, display: false) }
+        render()
+    }
+
+    func setArmed(_ armed: Bool) {
+        guard self.armed != armed else { return }
+        self.armed = armed
+        render()
+    }
+
+    func hide() {
+        panel?.orderOut(nil)
+    }
+
+    // MARK: - Private
+
+    private func ensurePanel() -> NSPanel {
+        if let panel { return panel }
+        let host = NSHostingView(rootView: guides)
+        // The controller owns the frame; without this the hosting view would size the window.
+        host.sizingOptions = []
+        let panel = PaletteDropGuidePanel()
+        panel.contentView = host
+        self.host = host
+        self.panel = panel
+        return panel
+    }
+
+    private func render() {
+        host?.rootView = guides
+    }
+
+    /// AppKit's y grows up from the screen's origin, SwiftUI's grows down from the window's top.
+    private var guides: PaletteDropGuideView {
+        PaletteDropGuideView(
+            topLeft: CGPoint(x: home.x - screenFrame.minX, y: screenFrame.maxY - home.y),
+            width: width,
+            armed: armed)
+    }
+}
+
+/// Borderless, click-through, never key: the guides are a readout, not a surface.
+private final class PaletteDropGuidePanel: NSPanel {
+    init() {
+        super.init(
+            contentRect: .zero,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false)
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        level = .paletteDropGuide
+        ignoresMouseEvents = true
+        hidesOnDeactivate = false
+        animationBehavior = .none
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        isReleasedWhenClosed = false
+    }
+
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}

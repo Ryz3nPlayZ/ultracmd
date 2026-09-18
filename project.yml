@@ -1,0 +1,83 @@
+name: UltraCMD
+options:
+  bundleIdPrefix: com.ultracmd
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "6.0"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Manual
+    # Stable self-signed identity so macOS keeps the Accessibility grant across rebuilds.
+    # Create it once — see docs/signing.md.
+    CODE_SIGN_IDENTITY: "UltraCMD Self-Signed"
+    SWIFT_STRICT_CONCURRENCY: complete
+  configs:
+    Release:
+      # Release-only: library validation refuses Debug's `.debug.dylib`, whose team never matches.
+      ENABLE_HARDENED_RUNTIME: YES
+      # Strip the shipped binary (dSYM is still generated first) and drop unused code.
+      DEPLOYMENT_POSTPROCESSING: YES
+      STRIP_INSTALLED_PRODUCT: YES
+      STRIP_SWIFT_SYMBOLS: YES
+      DEAD_CODE_STRIPPING: YES
+
+targets:
+  UltraCMD:
+    type: application
+    platform: macOS
+    sources:
+      - path: UltraCMD
+        # The helper's own sources: compiling them in would link Vision and PDFKit into the app,
+        # which is the whole thing running recognition out of process avoids.
+        excludes:
+          - Features/Clipboard/Service/ClipboardTextExtractor.swift
+          - Features/Clipboard/Service/ClipboardTextHelper.swift
+      # The MIT mark's licence asks the notice to travel with the binary, not just the repo.
+      - path: NOTICE.md
+        buildPhase: resources
+    dependencies:
+      - target: ClipboardTextHelper
+        link: false
+        embed: true
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ultracmd.app
+        INFOPLIST_FILE: UltraCMD/Info.plist
+        CODE_SIGN_ENTITLEMENTS: UltraCMD/UltraCMD.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: ultracmd
+        COMBINE_HIDPI_IMAGES: YES
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/../Frameworks"
+      configs:
+        # Debug is its own channel, like beta/stable in release.yml: a distinct bundle id means a
+        # locally-run build gets its own prefs, caches, TCC grants and login item instead of
+        # inheriting — and corrupting — the installed app's state.
+        Debug:
+          PRODUCT_NAME: UltraCMD Dev
+          PRODUCT_BUNDLE_IDENTIFIER: com.ultracmd.app.dev
+
+  ClipboardTextHelper:
+    type: tool
+    platform: macOS
+    sources:
+      - UltraCMD/Features/Clipboard/Service/ClipboardTextExtractor.swift
+      - UltraCMD/Features/Clipboard/Service/ClipboardTextHelper.swift
+    settings:
+      base:
+        # release.yml passes PRODUCT_NAME on the xcodebuild line, which hits every target: without
+        # these two pinned, a channel build renames the executable `ClipboardTextWorker` looks for
+        # and gives the module a name with a space in it.
+        EXECUTABLE_NAME: ClipboardTextHelper
+        PRODUCT_MODULE_NAME: ClipboardTextHelper
+        SKIP_INSTALL: YES

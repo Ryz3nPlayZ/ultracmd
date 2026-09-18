@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Raycast and UltraCMD URL Scheme</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>raycast</string>
+				<string>ultracmd</string>
+				<string>com.raycast</string>
+			</array>
+		</dict>
+	</array>
+	<!-- Exported, but deliberately no CFBundleDocumentTypes: claiming the type would make a
+	     double-clicked .ultracmd launch straight into writing over someone's data. The identifier
+	     is fixed rather than per-channel so Dev and stable can read each other's exports. -->
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.ultracmd.backup</string>
+			<key>UTTypeDescription</key>
+			<string>UltraCMD Backup</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>ultracmd</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>LSMinimumSystemVersion</key>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac</key>
+	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>UltraCMD uses automation to perform system actions you explicitly run.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>UltraCMD shows a camera preview so you can check yourself, and take a photo to the clipboard.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>UltraCMD reads today's and tomorrow's events so you can join a meeting from the palette.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>UltraCMD saves reminders only when you run a reminder capture.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>UltraCMD uses the microphone to dictate into the palette's search field and AI chat.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>UltraCMD transcribes what you dictate into the palette on this Mac.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>UltraCMD uses Bluetooth access only when you run the Toggle Bluetooth action.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>UltraCMD</string>
+</dict>
+</plist>
