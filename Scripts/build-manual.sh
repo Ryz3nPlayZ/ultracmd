@@ -1,8 +1,8 @@
 #!/bin/bash
 # Manual Release build for this machine: `xcodebuild` is license-blocked here, so the app is
-# compiled directly with swiftc and the bundle is assembled by hand. Assets.car and the icns are
-# built once (actool/iconutil) and reused from build/manual/UltraCMD.app; this script refreshes
-# the binary, Info.plist, NOTICE, the ad-hoc signature and the DMG.
+# compiled directly with swiftc and the bundle is assembled by hand. Assets.car (actool) and the
+# icns (iconutil) are rebuilt from UltraCMD/Assets.xcassets on every run, alongside the binary,
+# Info.plist, NOTICE, the ad-hoc signature and the DMG.
 #
 # Usage: Scripts/build-manual.sh [version]    # -> build/UltraCMD-<version>.dmg
 set -euo pipefail
@@ -13,11 +13,9 @@ if [ -z "$VERSION" ]; then
     VERSION=$(sed -n 's/.*MARKETING_VERSION: "\([0-9.]*\)".*/\1/p' project.yml | head -1)
 fi
 APP="build/manual/UltraCMD.app"
-
-if [ ! -d "$APP/Contents/Resources" ]; then
-    echo "error: $APP has no Resources — the one-time actool/iconutil assembly is missing." >&2
-    exit 1
-fi
+BUILD=$(sed -n 's/.*CURRENT_PROJECT_VERSION: "\([0-9]*\)".*/\1/p' project.yml | head -1)
+DEPLOY=$(sed -n 's/.*macOS: "\([0-9.]*\)".*/\1/p' project.yml | head -1)
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 echo "• Compiling UltraCMD ${VERSION}…"
 # Unquoted on purpose: bash word-splits the file list into swiftc arguments. The clipboard text
@@ -26,6 +24,24 @@ echo "• Compiling UltraCMD ${VERSION}…"
 SOURCES=$(find UltraCMD -name '*.swift' \
     ! -name 'ClipboardTextExtractor.swift' ! -name 'ClipboardTextHelper.swift')
 swiftc -O -swift-version 6 -module-name UltraCMD $SOURCES -o "$APP/Contents/MacOS/UltraCMD"
+
+echo "• Assets (actool, iconutil)…"
+# xcrun is license-blocked like xcodebuild; actool is reached by its absolute path instead.
+rm -f "$APP/Contents/Resources/Assets.car" "$APP/Contents/Resources/UltraCMD.icns"
+/Applications/Xcode.app/Contents/Developer/usr/bin/actool \
+    --compile "$APP/Contents/Resources" --platform macosx \
+    --minimum-deployment-target "$DEPLOY" --app-icon ultracmd \
+    --output-partial-info-plist /tmp/ultracmd-actool-partial.plist \
+    UltraCMD/Assets.xcassets > /tmp/ultracmd-actool.log 2>&1 \
+    || { cat /tmp/ultracmd-actool.log >&2; exit 1; }
+# actool emits its own icns next to the car; drop it so iconutil's is the one and only,
+# named to match CFBundleIconFile (the filesystem is case-insensitive; same-name = overwrite).
+rm -f "$APP/Contents/Resources/ultracmd.icns"
+ICONSET=$(mktemp -d)/UltraCMD.iconset
+mkdir -p "$ICONSET"
+cp UltraCMD/Assets.xcassets/ultracmd.appiconset/icon_*.png "$ICONSET/"
+iconutil -c icns -o "$APP/Contents/Resources/UltraCMD.icns" "$ICONSET"
+rm -rf "$(dirname "$ICONSET")"
 
 if [ ! -x "$APP/Contents/Helpers/ClipboardTextHelper" ]; then
     echo "• Building the clipboard text helper…"
@@ -39,8 +55,6 @@ fi
 
 echo "• Bundling…"
 # The source plist speaks xcodebuild's $(VARIABLE)s; resolve them the way the build system would.
-BUILD=$(sed -n 's/.*CURRENT_PROJECT_VERSION: "\([0-9]*\)".*/\1/p' project.yml | head -1)
-DEPLOY=$(sed -n 's/.*macOS: "\([0-9.]*\)".*/\1/p' project.yml | head -1)
 cp UltraCMD/Info.plist "$APP/Contents/Info.plist"
 sed -i '' \
     -e "s/\$(EXECUTABLE_NAME)/UltraCMD/g" \

@@ -9,7 +9,7 @@
 	<key>CFBundleIconFile</key>
 	<string>UltraCMD</string>
 	<key>CFBundleIconName</key>
-	<string>UltraCMD</string>
+	<string>ultracmd</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>

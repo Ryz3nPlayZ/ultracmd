@@ -51,8 +51,10 @@ system-wide chord, and HIToolbox's TIS APIs remain the public input-source mecha
 | claim a change is done | [testing.md](docs/testing.md) |
 | build, run or regenerate data | [development.md](docs/development.md) |
 | add or restyle any view | [ui.md](docs/ui.md) |
+| touch the app icon or brand colours | [brand.md](docs/brand.md) |
 | touch one feature's internals | [features/](docs/features/) — each opens with its invariants |
 | package or ship a build | [release.md](docs/release.md) |
+| plan what to build next | [roadmap.md](docs/roadmap.md) |
 
 ## Non-negotiables
 
@@ -96,8 +98,9 @@ feature's doc, under its own `## Invariants`.
   lists a command is a separate fact, and `SettingsTab.ownedCommands` is the only place that states it.
 - **Generated files are never hand-edited.** `EmojiData.generated.swift` comes from
   `node Scripts/gen-emoji.js`, `CurrencyData.generated.swift` from `node Scripts/gen-currencies.js`,
-  `CountryZoneData.generated.swift` from `node Scripts/gen-countries.js`, and
-  `Resources/RaycastRuntime.generated.js` from `Scripts/raycast-runtime/build.mjs` — the runtime is
+  `CountryZoneData.generated.swift` from `node Scripts/gen-countries.js`,
+  `Assets.xcassets/ultracmd.appiconset/` from `Scripts/gen-icon.swift` (see [brand.md](docs/brand.md)),
+  and `Resources/RaycastRuntime.generated.js` from `Scripts/raycast-runtime/build.mjs` — the runtime is
   committed so building the app never needs Node.
 - **`DesignSystem/Scrolling/EdgeDissolve.swift` and `ThinScrollbar.swift` are off-limits.** Both are
   tuned by eye against the palette's floating bars, so any edit is a visual regression. Needing to touch
