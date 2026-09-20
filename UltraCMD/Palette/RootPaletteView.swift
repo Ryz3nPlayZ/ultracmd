@@ -34,6 +34,8 @@ struct RootPaletteView: View {
     @State private var selectionIsRunning = false
     /// Highlighted row of whichever menu is open; each open path sets where it starts.
     @State private var menuSelection = 0
+    /// What's been typed into the open menu; its rows narrow by it, sections flattening away.
+    @State private var menuQuery = ""
     /// The argument field whose choices are up, so `menuContent` can rebuild the same menu.
     @State private var argumentOptionsField: String?
     @State private var menuPanel = MenuPanelController()
@@ -93,6 +95,14 @@ struct RootPaletteView: View {
             return AIScreen(
                 vm: vm, metrics: metrics, chat: core.aiChat, settings: core.aiSettings,
                 coordinator: core.aiChatCoordinator)
+        case .translate:
+            return TranslateScreen(
+                vm: vm, coordinator: core.translateCoordinator,
+                pasteTarget: PasteTarget(app: core.paletteCoordinator.targetApp),
+                sourceMenuOpen: openMenu == .translateSource,
+                targetMenuOpen: openMenu == .translateTarget,
+                openSourceMenu: toggleTranslateSource,
+                openTargetMenu: toggleTranslateTarget)
         case .aiHistory:
             return ChatHistoryScreen(
                 history: core.chatHistory, chat: core.aiChat, coordinator: core.aiChatCoordinator,
@@ -192,17 +202,49 @@ struct RootPaletteView: View {
         ])
     }
 
+    /// Row 0 is Auto; the rest is the framework's own list, so nothing offered can fail at press.
+    private var translateSourceContent: PopoverMenuContent {
+        var items = [
+            PopoverMenuItem(title: "Auto", systemImage: "wand.and.rays") {
+                core.translateCoordinator.setSource(nil)
+            }
+        ]
+        items += core.translateCoordinator.languages.map { language in
+            PopoverMenuItem(
+                title: TranslateModel.name(of: language), systemImage: "globe",
+                startsSection: language == core.translateCoordinator.languages.first
+            ) {
+                core.translateCoordinator.setSource(language)
+            }
+        }
+        return PopoverMenuContent(header: "Source Language", items: items)
+    }
+
+    private var translateTargetContent: PopoverMenuContent {
+        PopoverMenuContent(
+            header: "Target Language",
+            items: core.translateCoordinator.languages.map { language in
+                PopoverMenuItem(
+                    title: TranslateModel.name(of: language), systemImage: "character.book.closed"
+                ) {
+                    core.translateCoordinator.setTarget(language)
+                }
+            })
+    }
+
     /// The one source every menu path addresses rows through, so none can disagree.
     private var menuContent: PaletteMenuContent? {
         switch openMenu {
         case .actions:
             let screen = screen
             return screen.menuContent(
-                at: selection(in: screen), menuSelection: $menuSelection,
+                at: selection(in: screen), menuSelection: $menuSelection, filter: menuQuery,
                 onActivate: activateMenuItem)
         case .app:
             return PaletteMenuContent(
-                popover: appMenuContent, selection: $menuSelection, onActivate: activateMenuItem)
+                popover: appMenuContent.filtered(by: menuQuery), selection: $menuSelection,
+                filterText: menuQuery.isEmpty ? nil : menuQuery,
+                onActivate: activateMenuItem)
         case .clipboardFilter:
             return headerMenu(clipboardFilterContent, width: metrics.size.clipboardFilterMenuWidth)
         case .fileSearchFilter:
@@ -218,6 +260,10 @@ struct RootPaletteView: View {
                 AIModelMenu.reasoning(
                     coordinator: core.aiChatCoordinator, settings: core.aiSettings),
                 width: metrics.size.menuWidth)
+        case .translateSource:
+            return headerMenu(translateSourceContent, width: metrics.size.menuWidth)
+        case .translateTarget:
+            return headerMenu(translateTargetContent, width: metrics.size.menuWidth)
         case .argumentOptions:
             guard let field = argumentOptionsField,
                 let popover = headerAccessory?.optionsMenu(field)
@@ -342,6 +388,7 @@ struct RootPaletteView: View {
                 if vm.mode == .fileSearch { fileSearch.search(vm.query, filter: vm.fileSearchFilter) }
                 if vm.mode == .menuSearch { menuSearch.filter(vm.query) }
                 if vm.mode == .switchWindows { windowSwitch.filter(vm.query) }
+                if vm.mode == .translate { core.translateCoordinator.queryChanged(vm.query) }
                 // A command that took over the search text filters its own list.
                 if vm.mode == .extensionCommand, let handler = extensionScreen.searchTextHandler {
                     extensions.dispatch(handler: handler, arguments: [vm.query])
@@ -382,6 +429,11 @@ struct RootPaletteView: View {
                 } else {
                     fileSearch.cancel()
                 }
+                // A carried query translates the moment the screen opens; the list loads once.
+                if vm.mode == .translate {
+                    core.translateCoordinator.prepare()
+                    core.translateCoordinator.queryChanged(vm.query)
+                }
                 if vm.mode != .menuSearch { menuSearch.reset() }
                 if vm.mode != .switchWindows { windowSwitch.reset() }
                 // Leaving the screen any other way than Escape still ends the command's session.
@@ -407,11 +459,19 @@ struct RootPaletteView: View {
             // One optional makes "exactly one menu" structural; this only mirrors it for the panel.
             .onChange(of: openMenu) {
                 vm.menuOpen = menuOpen
+                vm.menuAcceptsTyping =
+                    openMenu?.supportsTyping == true && argumentOptionsField == nil
                 guard menuOpen else { return }
                 syncMenuPanel(presenting: true)
             }
             // The hosted tree is its own hierarchy, so the highlight has to be pushed into it.
             .onChange(of: menuSelection) { syncMenuPanel(presenting: false) }
+            // A narrowed list re-lands the highlight: typing picks rows, exactly like the list.
+            .onChange(of: menuQuery) {
+                guard menuOpen else { return }
+                menuSelection = firstSelectableMenuRow()
+                syncMenuPanel(presenting: false)
+            }
             .onDisappear {
                 menuPanel.hide()
                 (hostWindow as? PalettePanel)?.onHeaderFieldBoundaryArrow = nil
@@ -547,7 +607,8 @@ struct RootPaletteView: View {
             // The screen answers row chords; a bare backspace is intercepted in `sendEvent`.
             .onKeyPress(phases: .down) { press in
                 let isDeleteKey = press.key == .delete || press.key == .deleteForward
-                if isDeleteKey, menuOpen { return .handled }
+                // An empty query leaves the delete for the menu's own filter editor below.
+                if isDeleteKey, menuOpen, menuQuery.isEmpty { return .handled }
                 guard
                     let shortcut = PaletteShortcut.resolve(
                         command: press.modifiers.contains(.command),
@@ -578,6 +639,29 @@ struct RootPaletteView: View {
                 case .emojiCategory: toggleEmojiCategory()
                 case .ignored: return .ignored
                 }
+                return .handled
+            }
+            // Type-to-filter: an open menu narrows by plain keystrokes, the way the list does.
+            // Attached last so it is consulted first; the delete case hands off when the
+            // query is empty, which the chord handler above then swallows as before.
+            // Shift and option ride along — an option-composed glyph is still one typed
+            // character — while command and control stay the rows' own chords.
+            .onKeyPress(phases: .down) { press in
+                guard menuOpen, openMenu?.supportsTyping == true, argumentOptionsField == nil,
+                    !vm.isComposing
+                else { return .ignored }
+                let plain = press.modifiers.isDisjoint(with: [.command, .control])
+                let isDeleteKey = press.key == .delete || press.key == .deleteForward
+                if isDeleteKey {
+                    guard plain, !menuQuery.isEmpty else { return .ignored }
+                    if press.key == .delete { menuQuery.removeLast() }
+                    return .handled
+                }
+                let text = press.characters
+                guard plain, press.key != .tab, press.key != .return, press.key != .escape,
+                    !text.isEmpty
+                else { return .ignored }
+                menuQuery += text
                 return .handled
             }
     }
@@ -994,15 +1078,48 @@ struct RootPaletteView: View {
                 coordinator: core.aiChatCoordinator, settings: core.aiSettings))
     }
 
-    /// Every header menu states its own width, so resizing one never moves another.
+    /// Opens on the choice the picker holds: row 0 for Auto, else the language's own index.
+    private func toggleTranslateSource() {
+        if openMenu == .translateSource {
+            closeMenus()
+            return
+        }
+        let coordinator = core.translateCoordinator
+        let highlight: Int
+        if let source = coordinator.settings.sourceOverride {
+            highlight =
+                coordinator.languages.firstIndex(where: { $0.isEquivalent(to: source) })
+                    .map { $0 + 1 } ?? 0
+        } else {
+            highlight = 0
+        }
+        open(.translateSource, highlighting: highlight)
+    }
+
+    private func toggleTranslateTarget() {
+        if openMenu == .translateTarget {
+            closeMenus()
+            return
+        }
+        let coordinator = core.translateCoordinator
+        let target = coordinator.settings.target
+        let highlight = coordinator.languages.firstIndex(where: { $0.isEquivalent(to: target) }) ?? 0
+        open(.translateTarget, highlighting: highlight)
+    }
+
+    /// Every header menu states its own width, so resizing one never moves another. The ones that
+    /// take typing narrow by it here; the field-owned and extension-owned dropdowns stay whole.
     private func headerMenu(_ popover: PopoverMenuContent, width: CGFloat) -> PaletteMenuContent {
-        PaletteMenuContent(
-            popover: popover, selection: $menuSelection, width: width, onActivate: activateMenuItem)
+        let query = openMenu?.supportsTyping == true ? menuQuery : ""
+        return PaletteMenuContent(
+            popover: popover.filtered(by: query), selection: $menuSelection, width: width,
+            filterText: query.isEmpty ? nil : query, onActivate: activateMenuItem)
     }
 
     /// Every open path lands here, so the highlight is always stated rather than left behind.
     private func open(_ menu: OpenMenu, highlighting row: Int) {
         menuSelection = row
+        menuQuery = ""
         vm.noteMenuPresentation()
         openMenu = menu
     }
@@ -1010,6 +1127,7 @@ struct RootPaletteView: View {
     private func closeMenus() {
         menuPanel.hide()
         openMenu = nil
+        menuQuery = ""
         argumentOptionsField = nil
     }
 
@@ -1047,7 +1165,7 @@ struct RootPaletteView: View {
         case .actions: .bottomTrailing
         case .argumentOptions: .belowHeaderTrailing
         case .clipboardFilter, .fileSearchFilter, .emojiCategory, .aiModel, .aiReasoning,
-            .extensionAccessory:
+            .extensionAccessory, .translateSource, .translateTarget:
             .belowHeaderTrailing
         case nil: nil
         }
@@ -1116,6 +1234,12 @@ struct RootPaletteView: View {
             }
             row += delta
         }
+    }
+
+    /// Where a freshly narrowed menu lands; a list of nothing selectable parks on row 0.
+    private func firstSelectableMenuRow() -> Int {
+        guard let content = menuContent else { return 0 }
+        return (0..<content.rowCount).first { content.isSelectable($0) } ?? 0
     }
 
     /// The one activation path for a menu row: run its action, then close.
@@ -1256,6 +1380,23 @@ private enum OpenMenu {
     case emojiCategory
     case aiModel
     case aiReasoning
+    /// The Translate screen's source picker; row 0 is Auto.
+    case translateSource
+    /// The Translate screen's target picker.
+    case translateTarget
+
+    /// Whether plain typing narrows this menu. The two dropdowns decline: an argument options
+    /// list shares its keys with the field it belongs to, and an extension's search accessory
+    /// filters the command's own list through the field, not through the palette.
+    var supportsTyping: Bool {
+        switch self {
+        case .actions, .app, .clipboardFilter, .fileSearchFilter, .emojiCategory, .aiModel,
+            .aiReasoning, .translateSource, .translateTarget:
+            return true
+        case .extensionAccessory, .argumentOptions:
+            return false
+        }
+    }
 }
 
 /// Its own modifier: the palette's body is already at the type-checker's limit.

@@ -25,6 +25,9 @@ palette. The original project did the heavy lifting and deserves the credit.
 - Opt-in AI chat: OpenAI, Anthropic, Gemini, OpenRouter, Apple Intelligence, installed
   CLI agents, any OpenAI-compatible endpoint — plus a one-click **Ollama (local)** preset
 - AI quick actions on selected text (fix grammar, rewrite, translate, summarize)
+- **Translate**: a dedicated screen on Apple's on-device translator — type and it translates,
+  pick or swap languages, paste the result straight back into the app you came from; nothing
+  typed there ever leaves the Mac
 - **Screen awareness**: opt-in per-chat toggle that OCRs the front window and sends its
   text as context, so answers can lean on what you're looking at
 - **Dictation**: the palette header's mic button types into the search field and AI chat

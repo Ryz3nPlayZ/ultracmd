@@ -101,6 +101,10 @@ enum SettingsBackupCoverage {
             "The default model names an external AI destination; importing must not choose one.",
         AppSettingsKey.aiWebSearch.rawValue:
             "Whether prompts may reach a search engine is a choice each Mac makes for itself.",
+        AppSettingsKey.translateSourceLanguage.rawValue:
+            "Auto is the honest default on every Mac; a fixed source is one machine's habit.",
+        AppSettingsKey.translateTargetLanguage.rawValue:
+            "The picker's default follows each Mac's own language; one Mac's pick would fight it.",
         AppSettingsKey.aiScreenAwareness.rawValue:
             "Sending the screen's text to a model is a capability each Mac grants for itself; an "
             + "import must not arm it.",

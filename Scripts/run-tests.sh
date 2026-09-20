@@ -214,6 +214,9 @@ run keyboard-focus-test    UltraCMD/DesignSystem/Interaction/KeyboardFocus.swift
 run ai-instructions-test   UltraCMD/Features/AI/Model/AIInstructions.swift \
                            UltraCMD/Features/AI/Model/AIPreamble.swift
 run screen-awareness-test UltraCMD/Features/AI/Model/ScreenContext.swift
+run translate-test        UltraCMD/Features/Translate/Model/TranslateModel.swift
+run menu-filter-test      UltraCMD/Palette/MenuFilter.swift \
+                           UltraCMD/Features/Launcher/Model/SearchRelevance.swift
 run hover-arming-test      UltraCMD/Palette/HoverArming.swift \
                            UltraCMD/Palette/PaletteState.swift \
                            UltraCMD/Palette/PaletteMode.swift \

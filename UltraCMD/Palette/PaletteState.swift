@@ -74,6 +74,9 @@ final class PaletteState {
     @ObservationIgnored var searchFieldFrame: CGRect = .zero
     /// True while a footer menu is open. See docs/features/palette.md#menu-open-input-freeze.
     @ObservationIgnored var menuOpen = false { didSet { onMenuOpenChanged?(menuOpen) } }
+    /// True only while the open menu narrows by typing; `PalettePanel.sendEvent` reads it to decide
+    /// which plain keystrokes to hand to SwiftUI instead of freezing.
+    @ObservationIgnored var menuAcceptsTyping = false
     /// Fired when `menuOpen` flips, so the panel can hide the caret without a focus swap.
     @ObservationIgnored var onMenuOpenChanged: ((Bool) -> Void)?
     /// A fresh presentation resets a long popover to the row it opens with.

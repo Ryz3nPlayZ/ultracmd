@@ -444,15 +444,40 @@ path; the controller applies it as an opaque value and never reconstructs extens
 While a popover menu (⌘K Actions / app menu / clipboard type filter) is open the search field reads as inert but
 **never resigns first responder** — resigning makes the `NSTextField` swap between its field-editor
 and cell rendering, shifting the text / placeholder a point or two, so focus stays put. Input is
-frozen instead:
+frozen instead — except for menus that narrow by typing (see below), which take the keys:
 
 - `RootPaletteView` mirrors the open state into `PaletteState.menuOpen`, whose `didSet` fires
-  `onMenuOpenChanged`.
-- `PalettePanel.sendEvent` then swallows text-editing keystrokes while `menuOpen` (letting ⌘/⌃ chords
-  and menu-nav keys through to SwiftUI `onKeyPress`), which is how ⌘. and ⌃X still reach their rows.
+  `onMenuOpenChanged`, and the typing verdict into `PaletteState.menuAcceptsTyping`.
+- `PalettePanel.sendEvent` then swallows text-editing keystrokes while `menuOpen` and not
+  `menuAcceptsTyping` (letting ⌘/⌃ chords and menu-nav keys through to SwiftUI `onKeyPress`), which
+  is how ⌘. and ⌃X still reach their rows.
 - The caret is hidden by clearing SwiftUI's **own** live field editor's `insertionPointColor`. SwiftUI
   force-casts its field editor to a private subclass, so vending a custom one crashes — only the
   existing one can be tuned.
+
+## An open menu narrows by typing
+
+A keyboard-first menu is searchable from the keyboard: with a menu open, plain keystrokes build a
+`menuQuery` that its rows narrow by — ⌘K, type "quit", `↵` quits the app. `MenuFilter` (pure, with
+its own harness) decides which rows survive, using the launcher's `FuzzyMatch` so "quit" finds
+"Quit Application" the same way it would in the list. A filtered menu is **flat** — section titles
+and separators drop away, because a filter's cuts cross sections — and a filter that matches nothing
+leaves one disabled "No Matching Actions" row rather than closing the panel. The query is echoed as a
+magnifier row at the top of the menu, so typed keys land somewhere visible; the search field's own
+text never changes.
+
+The lifecycle: every open path (`open(_:highlighting:)`) and `closeMenus` reset `menuQuery`; each
+keystroke re-lands the highlight on the first selectable row and re-syncs the panel. Backspace edits
+the query, and with an empty one falls to the chord handler that has always swallowed deletes while a
+menu is open. Two menus decline typing, and `OpenMenu.supportsTyping` is the one place that says so:
+an `options=` argument field's choices (the field owns the keys) and an extension's `searchBarAccessory`
+dropdown (its filter belongs to the command's own list). Everything else — Actions, the app menu, the
+type/category filters, the AI model and effort menus, Translate's language pickers — narrows.
+
+Which menus type is also wired two layers deep on purpose: `sendEvent` only passes plain keys through
+to SwiftUI when `menuAcceptsTyping`, and the SwiftUI interceptor only claims them when the same
+`supportsTyping` says yes — either layer refusing keeps the frozen-input behaviour, so a new menu
+opts in by adding one case, not by loosening both layers.
 
 ## ↵ never commits the search field
 

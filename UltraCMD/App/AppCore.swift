@@ -61,6 +61,7 @@ final class AppCore {
     let customQuickActions = CustomQuickActionStore()
     let chatGPTSubscription = ChatGPTSubscriptionManager()
     let installedAI = InstalledAIManager()
+    let translateSettings = TranslateSettings()
 
     /// Set when a quicklink editor should open with Settings; the pane consumes it.
     var pendingQuicklinkEdit: QuicklinkEditRequest?
@@ -187,6 +188,11 @@ final class AppCore {
         chat: aiChat, settings: settings, appIndex: appIndex, palette: palette,
         paletteCoordinator: paletteCoordinator, settingsCoordinator: settingsCoordinator,
         core: self)
+
+    @ObservationIgnored private(set) lazy var translateCoordinator = TranslateCoordinator(
+        settings: translateSettings, paletteCoordinator: paletteCoordinator,
+        injector: textInjector,
+        showMessage: { [unowned self] message in self.showMessage(message) })
 
     @ObservationIgnored private lazy var windowController = PaletteWindowController(core: self)
     @ObservationIgnored private lazy var messageHUD = MessageHUDController(settings: settings)

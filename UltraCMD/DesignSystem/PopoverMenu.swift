@@ -97,6 +97,8 @@ struct PopoverMenu: View {
     @Binding var selection: Int
     /// Fixed, never intrinsic: a width tracking the longest row would jitter as rows change.
     var width: CGFloat?
+    /// The query the rows were narrowed by; shown so typed keys land somewhere visible.
+    var filterText: String?
     let onActivate: (Int) -> Void
     var attachment = Attachment.none
 
@@ -116,6 +118,25 @@ struct PopoverMenu: View {
             .glassEffect(.regular, in: shape)
     }
 
+    /// Stated, not editable: the palette captures the keys, so the panel only echoes them.
+    private func filterLabel(_ text: String) -> some View {
+        HStack(spacing: metrics.spacing.xs) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: metrics.scaled(Theme.Typography.menuSymbolSize)))
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(Theme.Colors.menuSymbol)
+            Text(text)
+                .font(metrics.typography.sectionHeader)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .frame(height: metrics.size.menuSectionHeader, alignment: .leading)
+        .padding(.horizontal, metrics.spacing.lg)
+        .padding(.top, metrics.spacing.xs)
+        .padding(.bottom, metrics.spacing.xs / 2)
+    }
+
     private func headerLabel(_ text: String) -> some View {
         Text(text)
             .font(metrics.typography.sectionHeader)
@@ -133,6 +154,10 @@ struct PopoverMenu: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    if let filterText {
+                        filterLabel(filterText)
+                        Color.clear.frame(height: metrics.size.menuRowSpacing)
+                    }
                     if let header {
                         headerLabel(header)
                         Color.clear.frame(height: metrics.size.menuRowSpacing)
@@ -195,7 +220,9 @@ struct PopoverMenu: View {
         min(contentHeight, viewportCapacity)
     }
 
-    private var viewportCapacity: CGFloat { metrics.size.menuRowsMaxHeight + headerExtent }
+    private var viewportCapacity: CGFloat {
+        metrics.size.menuRowsMaxHeight + headerExtent + filterExtent
+    }
 
     private var contentHeight: CGFloat {
         let rows = CGFloat(items.count)
@@ -203,7 +230,7 @@ struct PopoverMenu: View {
         let regularGaps = max(rows - 1 - separators, 0)
         let separatorHeight = metrics.spacing.sm * 2 + Theme.Size.hairline
         var contentHeight =
-            headerExtent
+            headerExtent + filterExtent
             + rows * metrics.size.menuRowHeight + regularGaps * metrics.size.menuRowSpacing
             + separators * separatorHeight
         for (index, item) in items.enumerated() where item.sectionTitle != nil {
@@ -211,6 +238,12 @@ struct PopoverMenu: View {
             if index > 0 { contentHeight += metrics.spacing.md }
         }
         return contentHeight
+    }
+
+    private var filterExtent: CGFloat {
+        guard filterText != nil else { return 0 }
+        return metrics.size.menuSectionHeader + metrics.spacing.xs * 1.5
+            + metrics.size.menuRowSpacing
     }
 
     private var headerExtent: CGFloat {

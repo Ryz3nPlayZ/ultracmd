@@ -22,7 +22,7 @@ re-litigated — never let it drift from the build.
 | 13 | Focus | ❌ **gap** |
 | 14 | File Search | ✅ |
 | 15 | Extensions | ✅ native JSC runtime |
-| 16 | Translate | ❌ **gap** |
+| 16 | Translate | ✅ on-device Translate screen (this week) |
 | 17 | Emoji and Symbols | ✅ |
 | 18 | Calendar | ✅ |
 | 19 | Calculator | ✅ units, currency, time zones |
@@ -60,23 +60,20 @@ re-litigated — never let it drift from the build.
 Ordering rule: user-visible value per day of work, and each item lands finished with its own doc
 section, settings surface and harness.
 
-1. **Translate** (ch. 16) — dedicated two-pane translate screen on the configured AI models:
-   source/target language pickers, live translate, paste-back into the front app. The engine
-   (providers, streaming, paste) already exists; this is a screen.
-2. **Auto-Quit** (ch. 29) — per-app idle quit: pick apps, background 3 min → quit. `NSWorkspace`
+1. **Auto-Quit** (ch. 29) — per-app idle quit: pick apps, background 3 min → quit. `NSWorkspace`
    notifications plus an idle timer; small, self-contained, real memory win.
-3. **Personalization** (ch. 42) — Profile first (manual text injected into every AI request),
+2. **Personalization** (ch. 42) — Profile first (manual text injected into every AI request),
    then Memory (opt-in, local-only, reviewable list; never in settings backups — it is learned
    capability). The privacy posture is the differentiator; state it in the UI.
-4. **Script Commands** (ch. 27) — scripts with `#@raycast`-style metadata headers as launcher
+3. **Script Commands** (ch. 27) — scripts with `#@raycast`-style metadata headers as launcher
    commands: directory registration, execution, output in a HUD. Unlocks the public
    raycast/script-commands corpus on day one.
-5. **Skills** (ch. 41) — `SKILL.md` discovery over folders, relevance picked per message by the
+4. **Skills** (ch. 41) — `SKILL.md` discovery over folders, relevance picked per message by the
    model itself. Builds on Personalization's injection seam.
-6. **Focus** (ch. 13) — sessions with goal/duration and block-or-allow lists. App blocking via
+5. **Focus** (ch. 13) — sessions with goal/duration and block-or-allow lists. App blocking via
    `NSWorkspace`; website blocking is the hard half — decide between a content-filter
    extension and an honest apps-only scope before starting.
-7. **Agents, finished** (ch. 39) + **extension commands as tools** (ch. 38) — per-preset model +
+6. **Agents, finished** (ch. 39) + **extension commands as tools** (ch. 38) — per-preset model +
    tool bindings, and letting the AI call extension commands the way it calls MCP servers today.
 
 ## Non-goals, and why they stay that way

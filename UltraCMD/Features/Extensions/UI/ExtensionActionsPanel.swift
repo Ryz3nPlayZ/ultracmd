@@ -20,18 +20,20 @@ private struct Metrics {
     }
 
     /// Exact, because every row is one known height: no measuring pass, and no greedy scroll view.
-    func contentHeight(items: [ExtensionActionItem], hasHeader: Bool) -> CGFloat {
+    func contentHeight(
+        items: [ExtensionActionItem], hasHeader: Bool, isFiltering: Bool = false
+    ) -> CGFloat {
         let rows = CGFloat(items.count)
         let separators = CGFloat(items.dropFirst().filter(\.startsSection).count)
         let regularGaps = max(rows - 1 - separators, 0)
         let separatorHeight = separatorSpacing * 2 + Theme.Size.hairline
         let header = hasHeader ? headerHeight : 0
         return header + rows * rowHeight + regularGaps * rowSpacing
-            + separators * separatorHeight
+            + separators * separatorHeight + (isFiltering ? headerHeight : 0)
     }
 
-    func maximumHeight(hasHeader: Bool) -> CGFloat {
-        rowsMaxHeight + (hasHeader ? headerHeight : 0)
+    func maximumHeight(hasHeader: Bool, isFiltering: Bool = false) -> CGFloat {
+        rowsMaxHeight + (hasHeader ? headerHeight : 0) + (isFiltering ? headerHeight : 0)
     }
 }
 
@@ -49,6 +51,8 @@ struct ExtensionActionsPanel: View {
     @Environment(\.metrics) private var metrics
     var header: String?
     let items: [ExtensionActionItem]
+    /// The query the rows were narrowed by; shown so typed keys land somewhere visible.
+    var filterText: String?
     @Binding var selection: Int
     let onActivate: (Int) -> Void
 
@@ -61,8 +65,10 @@ struct ExtensionActionsPanel: View {
 
     var body: some View {
         let hasHeader = header != nil
-        let contentHeight = panel.contentHeight(items: items, hasHeader: hasHeader)
-        let maximumHeight = panel.maximumHeight(hasHeader: hasHeader)
+        let isFiltering = filterText != nil
+        let contentHeight = panel.contentHeight(
+            items: items, hasHeader: hasHeader, isFiltering: isFiltering)
+        let maximumHeight = panel.maximumHeight(hasHeader: hasHeader, isFiltering: isFiltering)
         let shape = UnevenRoundedRectangle(
             topLeadingRadius: metrics.radius.menuPanel,
             bottomLeadingRadius: metrics.radius.menuPanel,
@@ -72,6 +78,24 @@ struct ExtensionActionsPanel: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    if let filterText {
+                        HStack(spacing: metrics.spacing.xs) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: metrics.scaled(Theme.Typography.menuSymbolSize)))
+                                .symbolRenderingMode(.monochrome)
+                                .foregroundStyle(Theme.Colors.menuSymbol)
+                            Text(filterText)
+                                .font(metrics.typography.sectionHeader)
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        .frame(height: metrics.size.menuSectionHeader, alignment: .leading)
+                        .padding(.horizontal, metrics.spacing.lg)
+                        .padding(.top, metrics.spacing.xs)
+                        .padding(.bottom, metrics.spacing.xs / 2)
+                        Color.clear.frame(height: panel.rowSpacing)
+                    }
                     if let header {
                         Text(header)
                             .font(metrics.typography.sectionHeader)

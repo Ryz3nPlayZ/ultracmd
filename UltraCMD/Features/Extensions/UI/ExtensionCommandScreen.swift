@@ -92,26 +92,47 @@ struct ExtensionCommandScreen: PaletteScreen {
 
     /// A command's rows carry tinted icons and its panel scrolls; a menu row cannot.
     func menuContent(
-        at selection: Int, menuSelection: Binding<Int>, onActivate: @escaping (Int) -> Void
+        at selection: Int, menuSelection: Binding<Int>, filter: String,
+        onActivate: @escaping (Int) -> Void
     ) -> PaletteMenuContent? {
-        let actions = ExtensionScreen.actions(in: screen.actionPanel(forItemAt: selection))
-        guard !actions.isEmpty else { return nil }
+        let allActions = ExtensionScreen.actions(in: screen.actionPanel(forItemAt: selection))
+        guard !allActions.isEmpty else { return nil }
+        // The palette's type-to-filter, applied to the action titles the panel will show.
+        let actions =
+            filter.isEmpty
+            ? allActions : allActions.filter { MenuFilter.keeps($0.title, query: filter) }
+        let items = ExtensionActionsMenu.rows(actions, assetsPath: assetsPath).map { item in
+            var flat = item
+            if !filter.isEmpty { flat.startsSection = false }
+            return flat
+        }
+        // A filter that matches nothing still leaves the panel up, saying so rather than closing.
+        let rows =
+            items.isEmpty
+            ? [ExtensionActionItem(
+                title: "No Matching Actions",
+                icon: ExtensionImage.actionIcon(
+                    nil, assetsPath: nil, isDark: NSApp.effectiveAppearance.isDark,
+                    isDestructive: false))]
+            : items
         let screen = screen
-        let assetsPath = assetsPath
         let extensions = extensions
         return PaletteMenuContent(
-            rowCount: actions.count,
+            rowCount: rows.count,
             view: { _ in
                 AnyView(
                     ExtensionActionsPanel(
                         header: ExtensionActionsMenu.header(screen: screen, selection: selection),
-                        items: ExtensionActionsMenu.rows(actions, assetsPath: assetsPath),
+                        items: rows, filterText: filter.isEmpty ? nil : filter,
                         selection: menuSelection, onActivate: onActivate))
             },
             activate: { index in
-                guard let handler = actions[index].handler else { return }
+                guard actions.indices.contains(index), let handler = actions[index].handler else {
+                    return
+                }
                 extensions.dispatch(handler: handler)
             },
+            isSelectable: { index in actions.indices.contains(index) },
             clipPath: { bounds, metrics, _ in
                 UnevenRoundedRectangle(
                     topLeadingRadius: metrics.radius.menuPanel,

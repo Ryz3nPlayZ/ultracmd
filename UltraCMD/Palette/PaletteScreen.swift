@@ -64,7 +64,7 @@ typealias MenuPanelClipPath =
 
     init(
         popover: PopoverMenuContent, selection: Binding<Int>, width: CGFloat? = nil,
-        onActivate: @escaping (Int) -> Void
+        filterText: String? = nil, onActivate: @escaping (Int) -> Void
     ) {
         self.init(
             rowCount: popover.items.count,
@@ -72,7 +72,7 @@ typealias MenuPanelClipPath =
                 AnyView(
                     PopoverMenu(
                         header: popover.header, items: popover.items, selection: selection,
-                        width: width, onActivate: onActivate,
+                        width: width, filterText: filterText, onActivate: onActivate,
                         attachment: corner.popoverAttachment))
             },
             activate: { popover.items[$0].action() },
@@ -84,6 +84,26 @@ typealias MenuPanelClipPath =
                 ).path(in: bounds).cgPath
             },
             motion: .palette)
+    }
+}
+
+extension PopoverMenuContent {
+    /// Narrowed by the palette's type-to-filter. A filtered menu is flat: its cuts cross sections.
+    func filtered(by query: String) -> PopoverMenuContent {
+        let kept = MenuFilter.indexes(ofTitles: items.map(\.title), query: query)
+        guard kept.count != items.count else { return self }
+        var rows = kept.map { index -> PopoverMenuItem in
+            var item = items[index]
+            item.sectionTitle = nil
+            item.startsSection = false
+            return item
+        }
+        if rows.isEmpty {
+            rows = [PopoverMenuItem(
+                title: "No Matching Actions", systemImage: "magnifyingglass",
+                isEnabled: false, action: {})]
+        }
+        return PopoverMenuContent(header: header, items: rows)
     }
 }
 
@@ -118,9 +138,11 @@ private extension MenuPanelCorner {
     func tabTarget(from selection: Int, backwards: Bool) -> Int?
     /// The ⌘K rows as the palette's own menu; nil when there are none.
     func actions(at selection: Int) -> PopoverMenuContent?
-    /// Defaults to wrapping `actions(at:)`, so a screen implements one or the other.
+    /// Defaults to wrapping `actions(at:)`, so a screen implements one or the other. `filter` is
+    /// the palette's type-to-filter for the open menu; empty leaves every row in place.
     func menuContent(
-        at selection: Int, menuSelection: Binding<Int>, onActivate: @escaping (Int) -> Void
+        at selection: Int, menuSelection: Binding<Int>, filter: String,
+        onActivate: @escaping (Int) -> Void
     ) -> PaletteMenuContent?
     func activate(at selection: Int)
     /// ⌘↵. False when the selection has no secondary action, leaving the key unhandled.
@@ -148,11 +170,13 @@ extension PaletteScreen {
     func tabTarget(from selection: Int, backwards: Bool) -> Int? { nil }
     func actions(at selection: Int) -> PopoverMenuContent? { nil }
     func menuContent(
-        at selection: Int, menuSelection: Binding<Int>, onActivate: @escaping (Int) -> Void
+        at selection: Int, menuSelection: Binding<Int>, filter: String,
+        onActivate: @escaping (Int) -> Void
     ) -> PaletteMenuContent? {
         guard let content = actions(at: selection) else { return nil }
         return PaletteMenuContent(
-            popover: content, selection: menuSelection, onActivate: onActivate)
+            popover: content.filtered(by: filter), selection: menuSelection,
+            filterText: filter.isEmpty ? nil : filter, onActivate: onActivate)
     }
     func pasteKeepingWindowOpen(at selection: Int) -> Bool { false }
     func perform(_ shortcut: PaletteShortcut, at selection: Int) -> Bool { false }

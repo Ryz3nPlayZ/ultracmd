@@ -160,6 +160,8 @@ final class LauncherCoordinator {
         switch id {
         case .aiChat:
             core.aiChatCoordinator.showChat()
+        case .translateScreen:
+            paletteCoordinator.togglePalette(mode: .translate)
         case .fixGrammar:
             core.quickActionCoordinator.run(.fixGrammar)
         case .rewrite:

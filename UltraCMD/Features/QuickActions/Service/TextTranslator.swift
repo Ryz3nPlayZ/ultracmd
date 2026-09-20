@@ -37,6 +37,13 @@ enum TextTranslator {
     /// Installed pairs only: a missing language is downloaded in System Settings, never from here.
     static func translate(_ text: String, to target: Locale.Language) async throws -> String {
         guard let source = sourceLanguage(of: text) else { throw Failure.undetectableSource }
+        return try await translate(text, from: source, to: target)
+    }
+
+    /// The same request with the source stated, for a picker that has already chosen one.
+    static func translate(
+        _ text: String, from source: Locale.Language, to target: Locale.Language
+    ) async throws -> String {
         guard !source.isEquivalent(to: target) else { return text }
         switch await LanguageAvailability().status(from: source, to: target) {
         case .installed:

@@ -169,8 +169,11 @@ final class PalettePanel: NSPanel {
             return
         }
         // A footer menu owns the keyboard. See docs/features/palette.md#menu-open-input-freeze.
+        // A menu that narrows by typing takes the plain keys instead, and SwiftUI's type-to-filter
+        // claims them before the search field can.
         if event.type == .keyDown,
             paletteState?.menuOpen == true,
+            paletteState?.menuAcceptsTyping != true,
             event.modifierFlags.isDisjoint(with: [.command, .control]),
             !Self.menuNavKeys.contains(Int(event.keyCode))
         {

@@ -3,6 +3,7 @@ import Foundation
 /// Built-in launcher actions, surfaced alongside the user-authored ones.
 enum CommandID: String, CaseIterable, Sendable {
     case aiChat = "command:ai-chat"
+    case translateScreen = "command:translate-screen"
     case fixGrammar = "command:fix-grammar"
     case rewrite = "command:rewrite"
     case translate = "command:translate"
@@ -52,6 +53,7 @@ enum CommandID: String, CaseIterable, Sendable {
     var name: String {
         switch self {
         case .aiChat: return "AI Chat"
+        case .translateScreen: return "Translate"
         case .fixGrammar: return BuiltInQuickAction.fixGrammar.title
         case .rewrite: return BuiltInQuickAction.rewrite.title
         case .translate: return BuiltInQuickAction.translate.title
@@ -103,6 +105,7 @@ enum CommandID: String, CaseIterable, Sendable {
     var sfSymbol: String {
         switch self {
         case .aiChat: return "sparkles"
+        case .translateScreen: return "translate"
         case .fixGrammar: return BuiltInQuickAction.fixGrammar.symbol
         case .rewrite: return BuiltInQuickAction.rewrite.symbol
         case .translate: return BuiltInQuickAction.translate.symbol

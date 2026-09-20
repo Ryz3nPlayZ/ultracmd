@@ -4,6 +4,7 @@ enum PaletteMode: String, CaseIterable, Identifiable {
     case launcher
     case clipboard
     case ai
+    case translate
     case aiHistory
     case calculatorHistory
     case emoji
@@ -28,6 +29,7 @@ enum PaletteMode: String, CaseIterable, Identifiable {
         case .launcher: return "magnifyingglass"
         case .clipboard: return "doc.on.doc"
         case .ai: return "sparkles"
+        case .translate: return "translate"
         case .aiHistory: return "clock.arrow.circlepath"
         case .calculatorHistory: return "plus.forwardslash.minus"
         case .emoji: return "face.smiling"
@@ -47,6 +49,7 @@ enum PaletteMode: String, CaseIterable, Identifiable {
         case .launcher: return "Search for apps and commands…"
         case .clipboard: return "Type to filter entries…"
         case .ai: return "Ask anything…"
+        case .translate: return "Enter text to translate…"
         case .aiHistory: return "Search chats…"
         case .calculatorHistory: return "Do math, convert units, or search your past calculations…"
         case .emoji: return "Search emoji and symbols…"
