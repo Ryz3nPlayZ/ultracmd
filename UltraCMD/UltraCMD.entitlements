@@ -13,6 +13,9 @@
 	<!-- Undeclared, tccd refuses the prompt outright: no dialog, and the request resolves as denied. -->
 	<key>com.apple.security.device.camera</key>
 	<true/>
+	<!-- Undeclared, the microphone prompt never appears and Dictation resolves as denied. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
 	<key>com.apple.security.personal-information.calendars</key>
 	<true/>
 </dict>

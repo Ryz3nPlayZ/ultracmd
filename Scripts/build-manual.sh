@@ -50,7 +50,7 @@ if [ ! -x "$APP/Contents/Helpers/ClipboardTextHelper" ]; then
         UltraCMD/Features/Clipboard/Service/ClipboardTextExtractor.swift \
         UltraCMD/Features/Clipboard/Service/ClipboardTextHelper.swift \
         -o "$APP/Contents/Helpers/ClipboardTextHelper"
-    codesign --force --sign - --timestamp=none "$APP/Contents/Helpers/ClipboardTextHelper"
+    codesign --force --sign - --timestamp=none --options runtime "$APP/Contents/Helpers/ClipboardTextHelper"
 fi
 
 echo "• Bundling…"
