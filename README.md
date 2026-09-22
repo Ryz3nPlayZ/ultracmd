@@ -35,6 +35,20 @@ palette. The original project did the heavy lifting and deserves the credit.
   as system actions, bindable to hotkeys like the rest
 - Notes, emoji picker, settings backup, Raycast import
 
+## Install
+
+```sh
+brew install Ryz3nPlayZ/tap/ultracmd
+```
+
+One command and no security prompt: Homebrew adds the tap itself, and the cask clears the quarantine
+flag Homebrew stamps on every download — the only thing that would otherwise make macOS refuse the
+first launch. `brew uninstall --cask ultracmd` removes it.
+
+The build is not notarized yet, so a DMG downloaded by hand still needs one click-through in System
+Settings. The cask is what makes the brew path immune to it; [docs/release.md](docs/release.md) has the
+mechanics and [docs/signing.md](docs/signing.md) the notarization path that would drop the workaround.
+
 ## Requirements
 
 macOS 26 or later, Apple Silicon.

@@ -3,9 +3,11 @@
 How a build reaches a user. The local development loop is in [development.md](development.md);
 the signing identity itself is in [signing.md](signing.md).
 
-> This fork ships local builds only: no release pipeline, tap or website exists for it. The
-> packaging and notarization steps below are inherited from upstream and work as written the day
-> this fork publishes releases of its own.
+> This fork has no CI pipeline and no website: a release is built on the maintainer's Mac and published
+> by `Scripts/publish-cask.sh` into the tap at
+> [Ryz3nPlayZ/homebrew-tap](https://github.com/Ryz3nPlayZ/homebrew-tap). The sections below that name a
+> workflow file, a beta/stable channel pair or a website describe upstream's machinery, which this fork
+> has not switched on.
 
 ## Packaging a DMG locally
 
@@ -15,14 +17,23 @@ the signing identity itself is in [signing.md](signing.md).
 ```
 
 It builds a Release `UltraCMD.app` signed with `UltraCMD Self-Signed` and packs it with an
-`/Applications` symlink. Official per-channel releases are built by CI, below.
+`/Applications` symlink. `Scripts/publish-cask.sh <version> --publish` then tags the release, uploads
+that DMG and pushes the Homebrew cask — see [Homebrew cask](#homebrew-cask).
 
 ## Signing & Gatekeeper
 
-Both local builds and CI releases sign with the same stable `UltraCMD Self-Signed` identity, not an
-Apple Developer ID — so macOS quarantines a directly-downloaded DMG. The Homebrew cask strips that
-automatically; direct downloaders run `xattr -dr com.apple.quarantine "…/UltraCMD.app"` once. Full
-details in [signing.md](signing.md).
+Builds sign with a stable local identity, not an Apple Developer ID, so Gatekeeper cannot vouch for
+them and macOS quarantines whatever a browser downloads. **Homebrew quarantines every cask download
+too** — it stamps the flag itself, and the `--no-quarantine` escape hatch it once offered was removed in
+6.0.14 — so a cask that wants a prompt-free first launch has to clear it, which is exactly what
+`Casks/ultracmd.rb`'s `postflight_steps` does. That is why `brew install` is the one install path with
+no click-through; a DMG downloaded by hand still needs one:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/UltraCMD.app"
+```
+
+Full details in [signing.md](signing.md).
 
 ## How the in-app updater consumes a release
 
@@ -109,18 +120,33 @@ Two details the script exists for:
 The Discord announcement carries the same changelog, truncated to fit Discord's component limit, and
 pings `@everyone`.
 
-### Homebrew tap automation
+## Homebrew cask
 
-Each job's final step rewrites the `version` + `sha256` of its cask (`ultracmd`, `ultracmd@beta` or
-`ultracmd-universal`) in the [`homebrew-ultracmd`](https://github.com/abue-ammar/homebrew-ultracmd) tap
-and pushes. It needs a `HOMEBREW_TAP_TOKEN` repo secret — a fine-grained PAT with **Contents:
-read/write** on the tap repo. Without the secret the step logs a warning and skips; the release still
-publishes. The `sed` is anchored to `^  version` / `^  sha256`, so a cask's two-space indent on those
-lines is load-bearing.
+`packaging/homebrew/Casks/ultracmd.rb` is the cask, and
+[Ryz3nPlayZ/homebrew-tap](https://github.com/Ryz3nPlayZ/homebrew-tap) serves it. One release, one cask,
+arm64 only — this fork publishes no beta/stable split and no universal build.
 
-Both stable casks install `UltraCMD.app` under `com.ultracmd.app`, so they `conflicts_with` one
-another and Homebrew routes each Mac by `depends_on`: `ultracmd` requires `arch: :arm64`, and
-`ultracmd-universal` takes the Intel Macs.
+```sh
+./Scripts/build-dmg.sh 1.1.0     # -> build/UltraCMD-1.1.0.dmg
+./Scripts/publish-cask.sh 1.1.0 --publish
+```
+
+`publish-cask.sh` rewrites the cask's `version` + `sha256` from that DMG, tags `v1.1.0` with the DMG
+attached, then pushes the cask into the tap, so a release and the cask that installs it cannot drift.
+Without `--publish` it only bumps the local copy. It authenticates with the maintainer's `gh` login, so
+no repo secret or PAT exists for it.
+
+A fully-qualified name is what Homebrew trusts on the spot, which is what makes the README's install
+one command with no `brew tap` or `brew trust` ahead of it. Two things the cask must keep true:
+
+- **Never publish below the installed version.** `auto_updates true` makes brew compare the installed
+  bundle's version with the cask's, so a release numbered under what users already have reads as a
+  downgrade and is skipped.
+- **`auto_updates true` stays.** It is Homebrew's own flag for an app that manages its own version, and
+  it is what keeps `brew update && brew upgrade` from fighting an app that updated itself: brew never
+  reports UltraCMD outdated, never re-downloads it, and never rolls a self-updated copy back. Removing
+  that line would reintroduce exactly those three problems. See
+  [features/updates.md](features/updates.md).
 
 ## Website
 

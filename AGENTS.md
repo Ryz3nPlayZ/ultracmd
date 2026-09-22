@@ -42,6 +42,7 @@ system-wide chord, and HIToolbox's TIS APIs remain the public input-source mecha
 | `UltraCMD/Windows/` | the non-palette AppKit surfaces: `Dialog/`, `HUD/`, `About/`, `AppWindowController` |
 | `UltraCMD/Features/` | one folder per feature; larger ones split `Model/` `Service/` `UI/` `Settings/` |
 | `Tests/` | the standalone harnesses — one Swift file each, no XCTest target |
+| `packaging/` | what ships the app: the Homebrew cask the tap serves |
 | `Scripts/` | every executable script: test runner, data generators, packaging, linting, editor setup |
 
 | Read it before you | Doc |

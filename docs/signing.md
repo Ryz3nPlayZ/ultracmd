@@ -4,8 +4,10 @@ UltraCMD is signed with a **stable self-signed identity** called `UltraCMD Self-
 _same_ identity on every build is what makes macOS remember the Accessibility permission across
 rebuilds and updates — ad-hoc signing changes every build and macOS forgets the grant.
 
-An Apple Developer ID certificate now exists, but nothing is signed with it yet. Why that switch is
-staged rather than immediate is [below](#the-developer-id-migration).
+No certificate from Apple is in use: builds sign with the local identity above, and the shipped 1.0.0 is
+ad-hoc signed — an identity that changes on every build, the exact problem the stable one exists to
+avoid. Why the Developer ID switch is staged rather than immediate is
+[below](#the-developer-id-migration).
 
 You create this identity **once**. The same identity is used for:
 
@@ -47,8 +49,8 @@ Now local builds (Xcode, VS Code F5, `xcodebuild`) sign with it, and you grant A
 
 ## 2. Generate the CI secrets
 
-The release workflow needs the same identity as two repo secrets. Export it, base64-encode it, and
-pick a password:
+Upstream's release workflow needs the same identity as two repo secrets — this fork has no workflow, so
+nothing here reads them. Export it, base64-encode it, and pick a password:
 
 ```sh
 # Pick a random password for the exported bundle.
@@ -89,6 +91,7 @@ Accessibility grant. Each entitlement in `UltraCMD/UltraCMD.entitlements` earns 
 | `com.apple.security.cs.allow-jit` | JavaScriptCore cannot JIT, and every extension command runs on the interpreter |
 | `com.apple.security.automation.apple-events` | Every Apple event is refused with `-1743` and no prompt — Get Info, the Finder selection an extension reads, and the System Events–driven system actions all die silently |
 | `com.apple.security.device.camera` | The camera prompt never appears and access resolves as denied |
+| `com.apple.security.device.audio-input` | The microphone prompt never appears, so Dictation resolves as denied |
 | `com.apple.security.personal-information.calendars` | `requestFullAccessToEvents()` returns `false` in milliseconds with no dialog, and UltraCMD never appears under System Settings › Calendars |
 
 **A usage string is not enough under the hardened runtime.** `tccd` checks the matching entitlement
@@ -137,6 +140,12 @@ build that a copy predating the migration could still install.
 ## Quarantine (separate from signing)
 
 macOS quarantines anything downloaded from the internet, and Gatekeeper blocks even a correctly
-self-signed app with an "unverified developer" warning. The Homebrew cask runs
-`xattr -dr com.apple.quarantine` in `postflight`, so **brew users never touch it**. People who
-download the DMG directly clear it once by hand.
+self-signed app with an "unverified developer" warning. **Homebrew quarantines every cask download
+itself** — it stamps the flag through LaunchServices — and the `--no-quarantine` escape hatch is gone
+(removed in 6.0.14), so `Casks/ultracmd.rb` clears it in `postflight_steps` and **brew users never touch
+it**. That step is the entire reason `brew install` is prompt-free, and it goes away the day builds are
+notarized. People who download the DMG directly clear the flag once by hand:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/UltraCMD.app"
+```
