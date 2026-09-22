@@ -26,6 +26,8 @@ enum PaletteShortcut: Equatable {
     case quit
     /// ⌘R.
     case restart
+    /// ⌘S, the Translate pane's round trip: languages swap and the result becomes the source.
+    case swapLanguages
     /// ⌘., which AppKit binds to `cancelOperation:`, so it arrives as a token instead of a key.
     case pin
     /// ⌘1…⌘0, matched by key code in the panel and handed over as a slot.
@@ -49,6 +51,7 @@ enum PaletteShortcut: Equatable {
         if command, shift, matches("h") { return .hideFromSearch }
         if control, shift, matches("q") { return .quit }
         if command, matches("r") { return .restart }
+        if command, matches("s") { return .swapLanguages }
         return nil
     }
 
@@ -56,7 +59,7 @@ enum PaletteShortcut: Equatable {
     var requiresExpanded: Bool {
         switch self {
         case .copyFile, .copyName, .copyPath, .pasteFile, .quickLook, .toggleFavorite,
-            .hideFromSearch, .quit, .restart:
+            .hideFromSearch, .quit, .restart, .swapLanguages:
             true
         case .commandDelete, .delete, .deleteAll, .pin, .favoriteSlot:
             false
@@ -66,7 +69,7 @@ enum PaletteShortcut: Equatable {
     var closesMenu: Bool {
         switch self {
         case .delete, .deleteAll, .copyFile, .copyName, .copyPath, .quickLook, .toggleFavorite,
-            .hideFromSearch:
+            .hideFromSearch, .swapLanguages:
             true
         case .commandDelete, .pasteFile, .quit, .restart, .pin, .favoriteSlot:
             false

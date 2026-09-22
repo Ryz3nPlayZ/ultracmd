@@ -1,15 +1,24 @@
 import AppKit
 import Observation
 
-/// Runs the Translate screen's requests: debounces the query, holds the phase, delivers results.
+/// Runs the Translate pane's requests: owns the source text, debounces it, holds the phase,
+/// delivers results, and reads either side aloud.
 @MainActor
 @Observable
 final class TranslateCoordinator {
     private let paletteCoordinator: PaletteCoordinator
     private let injector: TextInjector
     private let showMessage: (String) -> Void
+    /// The pane's microphone; speech lands in the source text while this screen is up.
+    let dictation: DictationController
+    let speaker = SpeechSpeaker()
+    private let canAskChat: () -> Bool
+    private let askChat: (String) -> Void
     let settings: TranslateSettings
 
+    /// The source pane's own text. The palette's search field is hidden on this screen, so
+    /// paragraphs survive: the field collapses line breaks, and translation wants them.
+    private(set) var sourceText = ""
     private(set) var phase: TranslateModel.Phase = .idle
     /// The framework's own list, so the pickers offer nothing that fails at press time.
     private(set) var languages: [Locale.Language] = []
@@ -21,12 +30,17 @@ final class TranslateCoordinator {
 
     init(
         settings: TranslateSettings, paletteCoordinator: PaletteCoordinator,
-        injector: TextInjector, showMessage: @escaping (String) -> Void
+        injector: TextInjector, dictation: DictationController,
+        showMessage: @escaping (String) -> Void,
+        canAskChat: @escaping () -> Bool, askChat: @escaping (String) -> Void
     ) {
         self.settings = settings
         self.paletteCoordinator = paletteCoordinator
         self.injector = injector
+        self.dictation = dictation
         self.showMessage = showMessage
+        self.canAskChat = canAskChat
+        self.askChat = askChat
     }
 
     var sourceTitle: String {
@@ -39,6 +53,8 @@ final class TranslateCoordinator {
         if case .done(let text) = phase { return text }
         return nil
     }
+
+    var canContinueInChat: Bool { canAskChat() && resultText != nil }
 
     /// Loads the language list once per process; a stored target the framework lacks is snapped.
     func prepare() {
@@ -55,7 +71,16 @@ final class TranslateCoordinator {
         }
     }
 
-    func queryChanged(_ text: String) {
+    /// A query typed before running the command seeds the pane and translates at once.
+    func admitCarriedQuery(_ query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        sourceChanged(trimmed)
+        translateNow()
+    }
+
+    func sourceChanged(_ text: String) {
+        sourceText = text
         debounce?.cancel()
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         lastText = trimmed
@@ -70,6 +95,13 @@ final class TranslateCoordinator {
             guard !Task.isCancelled, let self else { return }
             await self.translate(trimmed)
         }
+    }
+
+    /// Spoken phrases join the source rather than replace it: dictation types, not swaps.
+    func appendDictated(_ text: String) {
+        sourceChanged(
+            sourceText.isEmpty || sourceText.hasSuffix(" ") ? sourceText + text
+                : sourceText + " " + text)
     }
 
     /// ⏎ with no result yet: the same request, without waiting out the debounce.
@@ -108,7 +140,14 @@ final class TranslateCoordinator {
             source: settings.sourceOverride, target: settings.target, detected: detected)
         settings.sourceOverride = swapped.source
         settings.target = swapped.target
-        rerun()
+        // The round trip: the translation becomes the source, one motion, and answers flipped.
+        if let carried = TranslateModel.swapText(result: resultText, source: sourceText) {
+            lastText = carried
+            sourceText = carried
+            translateNow()
+        } else {
+            rerun()
+        }
     }
 
     private func rerun() {
@@ -120,6 +159,12 @@ final class TranslateCoordinator {
         guard let resultText else { return }
         Paster.copyPlainText(resultText)
         showMessage("Translation copied")
+    }
+
+    func copySource() {
+        guard !lastText.isEmpty else { return }
+        Paster.copyPlainText(sourceText)
+        showMessage("Source copied")
     }
 
     /// The paste lands where the palette was summoned, exactly as a snippet does.
@@ -136,8 +181,44 @@ final class TranslateCoordinator {
             })
     }
 
-    /// A new direction asks the same text again; a cleared field resets the screen.
-    func resetIfIdle() {
-        if case .translating = phase { phase = .idle }
+    /// Source and translation, handed to chat so a follow-up question has both.
+    func continueInChat() {
+        guard let result = resultText, !lastText.isEmpty else { return }
+        askChat(
+            "Review this translation from \(sourceTitle) to \(targetTitle). Source text:\n\n"
+            + "\(lastText)\n\nTranslation:\n\n\(result)")
+    }
+
+    func speakSource() {
+        guard !lastText.isEmpty else { return }
+        guard
+            let language = settings.sourceOverride ?? detected
+                ?? TextTranslator.sourceLanguage(of: sourceText)
+        else {
+            showMessage(TranslateEngine.Failure.undetectable.message)
+            return
+        }
+        speaker.toggle(sourceText, language: language)
+    }
+
+    func speakResult() {
+        guard let resultText else { return }
+        speaker.toggle(resultText, language: settings.target)
+    }
+
+    /// Escape's first press: the pane's text is what gets cleared before the screen is left.
+    func clearSource() {
+        debounce?.cancel()
+        speaker.stop()
+        sourceText = ""
+        lastText = ""
+        phase = .idle
+        detected = nil
+    }
+
+    /// Leaving the screen any way at all: the voice and the microphone stop with it.
+    func screenDismissed() {
+        speaker.stop()
+        dictation.stop()
     }
 }

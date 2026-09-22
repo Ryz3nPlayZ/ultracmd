@@ -137,8 +137,10 @@ that returning looks like never having left — and offers four motions over it:
 top, which would throw away the very selection being restored.
 
 **Escape clears a non-empty query before it leaves the screen**, so one press clears and the next
-leaves: an extension screen exits itself first (it keeps a stack the palette cannot see), then a
-pushed screen pops, and a root hides the palette. A focused inline argument field is a rung above the
+leaves: a screen that hides the search field clears its own text first (`consumeClearPress` —
+Translate's pane is the one today), an extension screen exits itself first (it keeps a stack the
+palette cannot see), then a pushed screen pops, and a root hides the palette. A focused inline
+argument field is a rung above the
 query, so Escape hands focus back to the search field first — the query that found the command is
 still there to be cleared by the next press. A bare backspace in an empty field takes the same step
 **but never closes**: on a root screen summoned by its own hotkey it falls to the root search, which

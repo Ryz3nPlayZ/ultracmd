@@ -2,17 +2,20 @@ import Foundation
 
 /// Which type filter ⌘P opens. The header shows at most one, so this says which — and a running
 /// command's own dropdown answers first, so UltraCMD's clipboard filter can never open over it.
+/// Translate's pickers are the shift pair: ⌘P the target, ⇧⌘P the source, like Raycast's.
 enum PaletteFilterAction: Equatable {
     /// A running command's `searchBarAccessory` dropdown.
     case extensionAccessory
     case clipboardFilter
     case fileSearchFilter
     case emojiCategory
+    case translateTargetPicker
+    case translateSourcePicker
     /// No filter on the header, so the key stays with the search field.
     case ignored
 
     static func resolve(
-        collapsed: Bool, mode: PaletteMode, commandHasAccessory: Bool
+        collapsed: Bool, mode: PaletteMode, commandHasAccessory: Bool, shift: Bool = false
     ) -> Self {
         // The compact bar draws no header controls, so neither filter has a button to hang off.
         guard !collapsed else { return .ignored }
@@ -21,6 +24,7 @@ enum PaletteFilterAction: Equatable {
         case .clipboard: return .clipboardFilter
         case .fileSearch: return .fileSearchFilter
         case .emoji: return .emojiCategory
+        case .translate: return shift ? .translateSourcePicker : .translateTargetPicker
         default: return .ignored
         }
     }

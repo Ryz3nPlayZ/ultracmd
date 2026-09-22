@@ -191,8 +191,10 @@ final class AppCore {
 
     @ObservationIgnored private(set) lazy var translateCoordinator = TranslateCoordinator(
         settings: translateSettings, paletteCoordinator: paletteCoordinator,
-        injector: textInjector,
-        showMessage: { [unowned self] message in self.showMessage(message) })
+        injector: textInjector, dictation: dictation,
+        showMessage: { [unowned self] message in self.showMessage(message) },
+        canAskChat: { [unowned self] in self.settings.aiEnabled },
+        askChat: { [unowned self] prompt in self.aiChatCoordinator.ask(prompt) })
 
     @ObservationIgnored private lazy var windowController = PaletteWindowController(core: self)
     @ObservationIgnored private lazy var messageHUD = MessageHUDController(settings: settings)
@@ -240,8 +242,13 @@ final class AppCore {
             UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 250])
             NSApp.setActivationPolicy(.accessory)
             // Spoken phrases join the query rather than replace it: dictation types, not swaps.
+            // The Translate pane's editor is the one surface the query isn't, so it takes them.
             dictation.onText = { [weak self] text in
                 guard let self else { return }
+                if self.palette.mode == .translate {
+                    self.translateCoordinator.appendDictated(text)
+                    return
+                }
                 let current = self.palette.query
                 self.palette.query =
                     current.isEmpty || current.hasSuffix(" ") ? current + text : current + " " + text

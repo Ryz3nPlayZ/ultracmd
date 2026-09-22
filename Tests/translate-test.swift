@@ -97,6 +97,27 @@ struct TranslateTest {
                 source: nil, target: Locale.Language(identifier: "en-US"),
                 detected: Locale.Language(identifier: "en-GB")))
 
+        // Swap text: the round trip only when a finished answer and a source exist.
+        check(
+            "a result becomes the next source",
+            TranslateModel.swapText(result: "hola", source: "hello") == "hola")
+        check(
+            "no result is a plain language swap",
+            TranslateModel.swapText(result: nil, source: "hello") == nil)
+        check(
+            "nothing typed carries nothing",
+            TranslateModel.swapText(result: "hola", source: "") == nil)
+
+        // Counts: words split on whitespace; characters are everything typed.
+        let counts = TranslateModel.counts(for: "  the meeting  starts\nat nine ")
+        check("counts words", counts.words == 5)
+        check("counts every character", counts.characters == "  the meeting  starts\nat nine ".count)
+        check("an empty field counts nothing", TranslateModel.counts(for: "").words == 0)
+        check(
+            "whitespace alone still counts characters",
+            TranslateModel.counts(for: "   ").words == 0
+                && TranslateModel.counts(for: "   ").characters == 3)
+
         // Phase carries exactly what the screen paints.
         check("phase equates", TranslateModel.Phase.done(text: "a") == .done(text: "a"))
 

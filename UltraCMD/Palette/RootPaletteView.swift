@@ -388,7 +388,6 @@ struct RootPaletteView: View {
                 if vm.mode == .fileSearch { fileSearch.search(vm.query, filter: vm.fileSearchFilter) }
                 if vm.mode == .menuSearch { menuSearch.filter(vm.query) }
                 if vm.mode == .switchWindows { windowSwitch.filter(vm.query) }
-                if vm.mode == .translate { core.translateCoordinator.queryChanged(vm.query) }
                 // A command that took over the search text filters its own list.
                 if vm.mode == .extensionCommand, let handler = extensionScreen.searchTextHandler {
                     extensions.dispatch(handler: handler, arguments: [vm.query])
@@ -423,16 +422,18 @@ struct RootPaletteView: View {
                 searchFocused = !screen.hidesSearchField
                 // Every way out of the Uninstall screen: back chevron, bare backspace, a fresh summon.
                 if vm.mode != .uninstall { uninstall.cancel() }
+                // The pane's voice and microphone stop with it, however it is left.
+                if vm.mode != .translate { core.translateCoordinator.screenDismissed() }
                 // Entering with no query is the blank screen's own request for recents.
                 if vm.mode == .fileSearch {
                     fileSearch.search(vm.query, filter: vm.fileSearchFilter)
                 } else {
                     fileSearch.cancel()
                 }
-                // A carried query translates the moment the screen opens; the list loads once.
+                // A carried query seeds the pane and translates the moment the screen opens.
                 if vm.mode == .translate {
                     core.translateCoordinator.prepare()
-                    core.translateCoordinator.queryChanged(vm.query)
+                    core.translateCoordinator.admitCarriedQuery(vm.query)
                 }
                 if vm.mode != .menuSearch { menuSearch.reset() }
                 if vm.mode != .switchWindows { windowSwitch.reset() }
@@ -552,6 +553,10 @@ struct RootPaletteView: View {
                 if menuPanel.isClosing { return .handled }
                 // An open list closes itself first, exactly as the ⌘K menu does.
                 if vm.isControlListOpen { return .ignored }
+                // A screen that hides the field clears its own text before anything steps back.
+                if !menuOpen, argumentFocused == nil, screen.consumeClearPress() {
+                    return .handled
+                }
                 switch PaletteEscapeAction.resolve(
                     menuOpen: menuOpen, argumentFocused: argumentFocused != nil, query: vm.query,
                     mode: vm.mode, canGoBack: vm.canGoBack,
@@ -631,12 +636,15 @@ struct RootPaletteView: View {
                 else { return .ignored }
                 switch PaletteFilterAction.resolve(
                     collapsed: isCollapsed, mode: vm.mode,
-                    commandHasAccessory: extensionCommandScreen?.searchAccessory != nil)
+                    commandHasAccessory: extensionCommandScreen?.searchAccessory != nil,
+                    shift: press.modifiers.contains(.shift))
                 {
                 case .extensionAccessory: toggleExtensionSearchAccessory()
                 case .clipboardFilter: toggleClipboardFilter()
                 case .fileSearchFilter: toggleFileSearchFilter()
                 case .emojiCategory: toggleEmojiCategory()
+                case .translateTargetPicker: toggleTranslateTarget()
+                case .translateSourcePicker: toggleTranslateSource()
                 case .ignored: return .ignored
                 }
                 return .handled

@@ -35,6 +35,19 @@ enum TranslateModel {
         return (target, detected ?? target)
     }
 
+    /// Swapping round-trips: a finished translation becomes the next source text, as one
+    /// motion. No result, or nothing typed, is a plain language swap instead.
+    static func swapText(result: String?, source: String) -> String? {
+        guard let result, !source.isEmpty else { return nil }
+        return result
+    }
+
+    /// The source strip's count line; characters include the whitespace words are made of.
+    static func counts(for text: String) -> (words: Int, characters: Int) {
+        let words = text.split(whereSeparator: \.isWhitespace).count
+        return (words: words, characters: text.count)
+    }
+
     /// The picker's first value: the Mac's own language when the framework has it, then English,
     /// then whatever the framework does have.
     static func defaultTarget(

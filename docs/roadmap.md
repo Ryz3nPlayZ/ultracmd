@@ -22,7 +22,7 @@ re-litigated — never let it drift from the build.
 | 13 | Focus | ❌ **gap** |
 | 14 | File Search | ✅ |
 | 15 | Extensions | ✅ native JSC runtime |
-| 16 | Translate | ✅ on-device Translate screen (this week) |
+| 16 | Translate | ✅ two-column on-device pane — TTS, dictation, ⌘S round trip (this week) |
 | 17 | Emoji and Symbols | ✅ |
 | 18 | Calendar | ✅ |
 | 19 | Calculator | ✅ units, currency, time zones |
