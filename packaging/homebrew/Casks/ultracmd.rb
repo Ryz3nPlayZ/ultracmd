@@ -1,6 +1,6 @@
 cask "ultracmd" do
-  version "0.1.0"
-  sha256 "267b35b6095aecc2bdfc76436aeacc2c39123e6ffcace1435ceb196bb4192e25"
+  version "1.1.0"
+  sha256 "f23c3b8e6cc5ad545e1a0f708ccf2abbff4d740111087109c1c3d7ed4f13ff6a"
 
   url "https://github.com/Ryz3nPlayZ/ultracmd/releases/download/v#{version}/UltraCMD-#{version}.dmg"
   name "UltraCMD"
