@@ -3935,6 +3935,7 @@
 					"@executable_path/../Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.ultracmd.app;
+				PRODUCT_NAME = UltraCMD;
 			};
 			name = Release;
 		};

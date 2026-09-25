@@ -66,6 +66,10 @@ targets:
         Debug:
           PRODUCT_NAME: UltraCMD Dev
           PRODUCT_BUNDLE_IDENTIFIER: com.ultracmd.app.dev
+        # Upstream's release.yml passes PRODUCT_NAME on the xcodebuild line; this fork's
+        # local build-dmg.sh does not, so Release needs its own name pinned here.
+        Release:
+          PRODUCT_NAME: UltraCMD
 
   ClipboardTextHelper:
     type: tool
